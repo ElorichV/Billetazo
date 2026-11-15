@@ -89,7 +89,8 @@ function createAppServer(engineInstance) {
   timerInterval.unref();
 
   engine.on('state_change', (message) => {
-    const frame = `data: ${JSON.stringify(message)}\n\n`;
+    // Solo evento y snapshot público: el detalle interno no sale por SSE.
+    const frame = `data: ${JSON.stringify({ event: message.event, snapshot: message.snapshot })}\n\n`;
     for (const client of sseClients) {
       try {
         client.write(frame);
@@ -145,7 +146,15 @@ function createAppServer(engineInstance) {
           ttlSeconds: body.ttlSeconds || 180,
           metadata: body.metadata || {},
         });
-        sendJson(res, 201, { ok: true, order });
+        sendJson(res, 201, { ok: true, order: engine.toPublicOrder(order), claimToken: order.claimToken });
+        return;
+      }
+
+      // 3b. PIN OTP para quien creó la orden (cabecera x-claim-token)
+      const claimMatch = pathname.match(/^\/api\/orders\/([^/]+)\/otp$/);
+      if (req.method === 'GET' && claimMatch) {
+        const otp = engine.getOrderOtp(decodeURIComponent(claimMatch[1]), req.headers['x-claim-token']);
+        sendJson(res, 200, { ok: true, ...otp });
         return;
       }
 
@@ -170,7 +179,7 @@ function createAppServer(engineInstance) {
           orderId,
           otpCode: body.otpCode,
         });
-        sendJson(res, 200, { ok: true, order });
+        sendJson(res, 200, { ok: true, order: engine.toPublicOrder(order) });
         return;
       }
 
@@ -302,7 +311,7 @@ function createAppServer(engineInstance) {
 
       sendJson(res, 404, { ok: false, error: 'Ruta no encontrada.' });
     } catch (err) {
-      sendJson(res, 400, {
+      sendJson(res, err?.statusCode || 400, {
         ok: false,
         error: err instanceof Error ? err.message : 'Error procesando la solicitud.',
       });

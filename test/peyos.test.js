@@ -42,7 +42,8 @@ test('2. Inicia con estado funcional limpio (sin datos falsos pre-sembrados) y e
   const firstResult = engine.simulateSignedWebhookForOrder(order.orderId, 'SUCCESS');
   assert.equal(firstResult.httpStatus, 200);
   assert.equal(firstResult.status, 'PAID_AND_EXECUTED');
-  assert.ok(firstResult.otpCode);
+  assert.equal(firstResult.otpCode, undefined);
+  assert.match(engine.orders.get(order.orderId).otpCode, /^\d{6}$/);
   assert.equal(engine.liveStudio.activeTracks.cyber_arp.paidCount, 1);
   assert.equal(engine.liveStudio.muralTiles.length, 1);
 
@@ -85,6 +86,7 @@ test('4. Separa Pago de Identidad/Entrega: Smart Locker requiere OTP de un solo 
 
   const paid = engine.simulateSignedWebhookForOrder(order.orderId, 'SUCCESS');
   assert.equal(paid.status, 'PAID_AND_EXECUTED');
+  paid.otpCode = engine.orders.get(order.orderId).otpCode;
   // El pago NO abre el casillero hasta verificar el OTP
   assert.equal(engine.lockers['LOCKER-A1'].status, 'PAID_WAITING_OTP');
 
@@ -289,5 +291,55 @@ test('11. Rutas de simulación y configuración exigen token de administrador en
     else process.env.NODE_ENV = saved.env;
     if (saved.token === undefined) delete process.env.PEYOS_ADMIN_TOKEN;
     else process.env.PEYOS_ADMIN_TOKEN = saved.token;
+  }
+});
+
+test('12. El PIN OTP solo lo recibe quien creó la orden (no viaja en snapshot, SSE ni respuesta del webhook)', async () => {
+  const { server, engine } = createAppServer();
+  await new Promise((resolve) => server.listen(0, resolve));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const sse = await fetch(`${base}/api/events`);
+  const reader = sse.body.getReader();
+  const decoder = new TextDecoder();
+
+  try {
+    const createRes = await fetch(`${base}/api/orders`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ station: 'locker', method: 'QR', metadata: { lockerId: 'LOCKER-A1' } }),
+    });
+    const { order, claimToken } = await createRes.json();
+    assert.match(claimToken, /^[0-9a-f]{32}$/);
+    assert.equal(order.claimToken, undefined);
+
+    const result = engine.simulateSignedWebhookForOrder(order.orderId, 'SUCCESS');
+    assert.equal(result.otpCode, undefined);
+    const otp = engine.orders.get(order.orderId).otpCode;
+    assert.match(otp, /^\d{6}$/);
+
+    let streamed = '';
+    while (!streamed.includes('order.paid')) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      streamed += decoder.decode(value);
+    }
+    assert.ok(streamed.includes('order.paid'));
+    assert.ok(!streamed.includes(otp), 'el OTP no debe viajar por SSE');
+    assert.ok(!streamed.includes(claimToken), 'el claimToken no debe viajar por SSE');
+
+    const state = await (await fetch(`${base}/api/state`)).text();
+    assert.ok(!state.includes(otp));
+    assert.ok(!state.includes(claimToken));
+
+    const otpUrl = `${base}/api/orders/${order.orderId}/otp`;
+    assert.equal((await fetch(otpUrl)).status, 403);
+    assert.equal((await fetch(otpUrl, { headers: { 'x-claim-token': 'f'.repeat(32) } })).status, 403);
+    const claimed = await fetch(otpUrl, { headers: { 'x-claim-token': claimToken } });
+    assert.equal(claimed.status, 200);
+    assert.equal((await claimed.json()).otpCode, otp);
+  } finally {
+    await reader.cancel();
+    server.closeAllConnections();
+    await new Promise((resolve) => server.close(resolve));
   }
 });
