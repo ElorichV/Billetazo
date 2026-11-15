@@ -12,3 +12,7 @@ services:
         value: 0.0.0.0
       - key: PEY_API_BASE_URL
         value: https://api.pey.mx
+      - key: PEY_WEBHOOK_SECRET
+        sync: false
+      - key: PEYOS_ADMIN_TOKEN
+        sync: false

@@ -494,6 +494,7 @@ class PeyEngine extends EventEmitter {
       deliveredAt: null,
       transactionId: null,
       otpCode: null,
+      claimToken: crypto.randomBytes(16).toString('hex'),
       voucherCode: null,
       failoverHistory: [],
       metadata,
@@ -736,7 +737,7 @@ class PeyEngine extends EventEmitter {
       clabe: order.clabe,
       holderName: order.holderName,
       outcome: 'EXECUTED_ONCE_VERIFIED',
-      reason: `Pago $${Number(order.amount).toFixed(2)} confirmado en ${order.bankName} (${order.holderName}). PIN OTP ${otpCode} emitido.`,
+      reason: `Pago $${Number(order.amount).toFixed(2)} confirmado en ${order.bankName} (${order.holderName}). PIN OTP emitido al comprador.`,
       payload,
     };
     this._pushWebhookLog(successLog);
@@ -746,7 +747,6 @@ class PeyEngine extends EventEmitter {
       httpStatus: 200,
       status: 'PAID_AND_EXECUTED',
       orderId: order.orderId,
-      otpCode,
       transactionId: order.transactionId,
     };
   }
@@ -794,7 +794,6 @@ class PeyEngine extends EventEmitter {
         jobId: `ai_${order.orderId}`,
         prompt: meta.aiPrompt || `Bloque audiovisual generado por orden #${order.numRef}`,
         status: 'COMPLETED_DELIVERED',
-        otpCode: order.otpCode,
         completedAt: Date.now(),
       });
     } else if (order.station === 'locker') {
@@ -802,7 +801,6 @@ class PeyEngine extends EventEmitter {
       const locker = this.lockers[lockerId] || this.lockers['LOCKER-A1'];
       locker.status = 'PAID_WAITING_OTP';
       locker.activeOrderId = order.orderId;
-      locker.otpHint = order.otpCode;
     } else if (order.station === 'split') {
       const slotId = meta.slotId;
       let slot = this.splitSession.participants.find((p) => p.slotId === slotId || p.orderId === order.orderId);
@@ -836,7 +834,6 @@ class PeyEngine extends EventEmitter {
           itemName: meta.itemName || order.concept,
           donor: meta.payerAlias || order.holderName,
           clabe: order.clabe,
-          otpCode: order.otpCode,
           orderId: order.orderId,
           status: 'AVAILABLE',
           createdAt: Date.now(),
@@ -934,7 +931,7 @@ class PeyEngine extends EventEmitter {
 
     this.metrics.failoversExecuted += 1;
     this._broadcastState('order.failover', order);
-    return order;
+    return this.toPublicOrder(order);
   }
 
   /**
@@ -1050,6 +1047,27 @@ class PeyEngine extends EventEmitter {
     });
   }
 
+  /**
+   * Vista de la orden sin secretos: el PIN y el claimToken solo los conoce quien creó la orden.
+   */
+  toPublicOrder(order) {
+    const { otpCode: _otp, claimToken: _claim, lastWebhookId: _wh, ...rest } = order;
+    return rest;
+  }
+
+  /**
+   * Entrega el PIN de una orden pagada solo a quien presenta el claimToken recibido al crearla.
+   */
+  getOrderOtp(orderId, claimToken) {
+    const order = this.orders.get(orderId);
+    const provided = Buffer.from(String(claimToken || ''), 'utf8');
+    const expected = Buffer.from(String(order?.claimToken || ''), 'utf8');
+    if (!order || !expected.length || provided.length !== expected.length || !crypto.timingSafeEqual(provided, expected)) {
+      throw Object.assign(new Error('Token de orden inválido.'), { statusCode: 403 });
+    }
+    return { orderId, status: order.status, otpCode: order.status === 'OTP_ISSUED' ? order.otpCode : null };
+  }
+
   getSnapshot() {
     return {
       peyStatus: this.peyClient.getPublicStatus(),
@@ -1062,7 +1080,8 @@ class PeyEngine extends EventEmitter {
       sponsoredMeals: this.sponsoredMeals,
       orders: Array.from(this.orders.values())
         .sort((a, b) => b.createdAt - a.createdAt)
-        .slice(0, 30),
+        .slice(0, 30)
+        .map((o) => this.toPublicOrder(o)),
       vouchers: Array.from(this.vouchers.values()),
       webhookLogs: this.webhookLogs.slice(0, 30),
     };

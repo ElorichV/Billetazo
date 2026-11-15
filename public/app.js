@@ -206,17 +206,75 @@
     setTimeout(() => el.remove(), 4200);
   }
 
+  let adminToken = '';
+
   async function apiPost(url, body = {}) {
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
+    const headers = { 'Content-Type': 'application/json' };
+    if (adminToken) headers['x-admin-token'] = adminToken;
+    const res = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body) });
+    if (res.status === 403 && !adminToken) {
+      const token = window.prompt('Token de administrador para esta acción:');
+      if (token) {
+        adminToken = token.trim();
+        return apiPost(url, body);
+      }
+    }
+    if (res.status === 403) adminToken = '';
     const data = await res.json();
     if (!res.ok || data.ok === false) {
       throw new Error(data.error || data.reason || 'Error en la operación.');
     }
+    if (data.claimToken && data.order?.orderId) {
+      orderClaims.set(data.order.orderId, data.claimToken);
+    }
     return data;
+  }
+
+  // El servidor no publica PINs: cada navegador pide solo los de las órdenes que creó.
+  const orderClaims = new Map();
+  const orderOtps = new Map();
+  const otpRequests = new Map();
+
+  function claimOtp(orderId) {
+    if (orderOtps.has(orderId)) return Promise.resolve(orderOtps.get(orderId));
+    const claimToken = orderClaims.get(orderId);
+    if (!claimToken) return Promise.resolve(null);
+    if (!otpRequests.has(orderId)) {
+      const request = fetch(`/api/orders/${encodeURIComponent(orderId)}/otp`, {
+        headers: { 'x-claim-token': claimToken },
+      })
+        .then((res) => res.json())
+        .then((data) => {
+          if (data.otpCode) orderOtps.set(orderId, data.otpCode);
+          return data.otpCode || null;
+        })
+        .catch(() => null)
+        .finally(() => otpRequests.delete(orderId));
+      otpRequests.set(orderId, request);
+    }
+    return otpRequests.get(orderId);
+  }
+
+  function attachOwnOtps(snapshot) {
+    const pending = [];
+    for (const order of snapshot.orders || []) {
+      if (order.status !== 'OTP_ISSUED') continue;
+      if (orderOtps.has(order.orderId)) order.otpCode = orderOtps.get(order.orderId);
+      else if (orderClaims.has(order.orderId)) pending.push(order.orderId);
+    }
+    for (const token of snapshot.sponsoredMeals?.availableTokens || []) {
+      if (orderOtps.has(token.orderId)) token.otpCode = orderOtps.get(token.orderId);
+    }
+    for (const locker of Object.values(snapshot.lockers || {})) {
+      if (locker.status === 'PAID_WAITING_OTP' && orderOtps.has(locker.activeOrderId)) {
+        locker.otpHint = orderOtps.get(locker.activeOrderId);
+      }
+    }
+    if (pending.length) {
+      Promise.all(pending.map(claimOtp)).then((otps) => {
+        if (otps.some(Boolean) && currentState === snapshot) renderAll(snapshot);
+      });
+    }
   }
 
   function escapeHtml(str) {
@@ -259,6 +317,7 @@
   // =========================================================================
   function renderAll(snapshot) {
     currentState = snapshot;
+    attachOwnOtps(snapshot);
     renderTopStatus(snapshot.peyStatus);
     renderMetrics(snapshot.metrics);
     renderClabeSelectors(snapshot.clabes);
@@ -1111,7 +1170,7 @@
         });
         if (scenario === 'SUCCESS') {
           synthAudio.playPaymentChime();
-          const otp = res.chaosResult?.otpCode;
+          const otp = await claimOtp(selectedOrderId);
           if (otp) {
             document.getElementById('input-verify-otp').value = otp;
             kioskPinBuffer = otp;

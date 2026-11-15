@@ -2,15 +2,23 @@ const crypto = require('node:crypto');
 const QRCode = require('qrcode');
 
 const DEFAULT_BASE_URL = process.env.PEY_API_BASE_URL || 'https://api.pey.mx';
+const TIMESTAMP_TOLERANCE_SECONDS = 5 * 60;
+
+// Sin secreto configurado se usa uno aleatorio por proceso: nadie externo puede firmar webhooks válidos.
+function randomWebhookSecret() {
+  return `whsec_${crypto.randomBytes(24).toString('base64')}`;
+}
 
 /**
- * Normaliza el secreto de Standard Webhooks (whsec_...) a un Buffer para HMAC-SHA256.
+ * Standard Webhooks: el secreto es base64 después del prefijo whsec_.
  * @param {string} secret
  * @returns {Buffer}
  */
 function resolveSecretKey(secret) {
-  const clean = (secret || 'whsec_peyos_production_hmac_secret_2026').replace(/^whsec_/, '');
-  return Buffer.from(clean, 'utf8');
+  if (!secret) {
+    throw new Error('Falta el secreto de webhooks.');
+  }
+  return Buffer.from(secret.replace(/^whsec_/, ''), 'base64');
 }
 
 /**
@@ -53,6 +61,11 @@ function verifyStandardWebhook(rawBody, headers, secret) {
     };
   }
 
+  const tsSeconds = Number(timestamp);
+  if (!Number.isFinite(tsSeconds) || Math.abs(Date.now() / 1000 - tsSeconds) > TIMESTAMP_TOLERANCE_SECONDS) {
+    return { valid: false, webhookId, reason: 'webhook-timestamp fuera de la ventana permitida (posible replay).' };
+  }
+
   const expected = signStandardWebhook(rawBody, secret, webhookId, timestamp)['webhook-signature'];
   const providedSignatures = signatureHeader.split(' ');
 
@@ -91,8 +104,7 @@ class PeyClient {
   constructor(options = {}) {
     this.baseUrl = (options.baseUrl || DEFAULT_BASE_URL).replace(/\/+$/, '');
     this.apiKey = options.apiKey || process.env.PEY_API_KEY || '';
-    this.webhookSecret =
-      options.webhookSecret || process.env.PEY_WEBHOOK_SECRET || 'whsec_peyos_production_hmac_secret_2026';
+    this.webhookSecret = options.webhookSecret || process.env.PEY_WEBHOOK_SECRET || randomWebhookSecret();
     this.defaultBankAccountId = options.defaultBankAccountId || process.env.PEY_DEFAULT_BANK_ACCOUNT_ID || '';
   }
 

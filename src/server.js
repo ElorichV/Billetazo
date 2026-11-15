@@ -1,4 +1,5 @@
 const http = require('node:http');
+const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const { PeyEngine } = require('./engine/peyEngine');
@@ -64,6 +65,20 @@ function sendJson(res, statusCode, data) {
   res.end(payload);
 }
 
+// Rutas que pueden marcar órdenes como pagadas o cambiar credenciales.
+// Con PEYOS_ADMIN_TOKEN exigen la cabecera x-admin-token; sin él solo funcionan fuera de producción.
+function isAdminRequest(req) {
+  const token = process.env.PEYOS_ADMIN_TOKEN;
+  if (!token) {
+    return process.env.NODE_ENV !== 'production';
+  }
+  const provided = Buffer.from(String(req.headers['x-admin-token'] || ''), 'utf8');
+  const expected = Buffer.from(token, 'utf8');
+  return provided.length === expected.length && crypto.timingSafeEqual(provided, expected);
+}
+
+const ADMIN_PATHS = new Set(['/api/chaos/simulate', '/api/webhooks/dispatch', '/api/config/pey']);
+
 function createAppServer(engineInstance) {
   const engine = engineInstance || new PeyEngine();
   const sseClients = new Set();
@@ -74,7 +89,8 @@ function createAppServer(engineInstance) {
   timerInterval.unref();
 
   engine.on('state_change', (message) => {
-    const frame = `data: ${JSON.stringify(message)}\n\n`;
+    // Solo evento y snapshot público: el detalle interno no sale por SSE.
+    const frame = `data: ${JSON.stringify({ event: message.event, snapshot: message.snapshot })}\n\n`;
     for (const client of sseClients) {
       try {
         client.write(frame);
@@ -90,6 +106,11 @@ function createAppServer(engineInstance) {
     try {
       const parsedUrl = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
       const pathname = parsedUrl.pathname;
+
+      if (ADMIN_PATHS.has(pathname) && !isAdminRequest(req)) {
+        sendJson(res, 403, { ok: false, error: 'Requiere token de administrador.' });
+        return;
+      }
 
       // 1. SSE Real-Time Stream
       if (req.method === 'GET' && pathname === '/api/events') {
@@ -125,7 +146,15 @@ function createAppServer(engineInstance) {
           ttlSeconds: body.ttlSeconds || 180,
           metadata: body.metadata || {},
         });
-        sendJson(res, 201, { ok: true, order });
+        sendJson(res, 201, { ok: true, order: engine.toPublicOrder(order), claimToken: order.claimToken });
+        return;
+      }
+
+      // 3b. PIN OTP para quien creó la orden (cabecera x-claim-token)
+      const claimMatch = pathname.match(/^\/api\/orders\/([^/]+)\/otp$/);
+      if (req.method === 'GET' && claimMatch) {
+        const otp = engine.getOrderOtp(decodeURIComponent(claimMatch[1]), req.headers['x-claim-token']);
+        sendJson(res, 200, { ok: true, ...otp });
         return;
       }
 
@@ -150,7 +179,7 @@ function createAppServer(engineInstance) {
           orderId,
           otpCode: body.otpCode,
         });
-        sendJson(res, 200, { ok: true, order });
+        sendJson(res, 200, { ok: true, order: engine.toPublicOrder(order) });
         return;
       }
 
@@ -282,7 +311,7 @@ function createAppServer(engineInstance) {
 
       sendJson(res, 404, { ok: false, error: 'Ruta no encontrada.' });
     } catch (err) {
-      sendJson(res, 400, {
+      sendJson(res, err?.statusCode || 400, {
         ok: false,
         error: err instanceof Error ? err.message : 'Error procesando la solicitud.',
       });
@@ -293,6 +322,10 @@ function createAppServer(engineInstance) {
 }
 
 if (require.main === module) {
+  if (process.env.NODE_ENV === 'production' && !process.env.PEY_WEBHOOK_SECRET) {
+    console.error('PEY_WEBHOOK_SECRET es obligatorio en producción.');
+    process.exit(1);
+  }
   const port = Number(process.env.PORT || 3000);
   const host = process.env.HOST || '127.0.0.1';
   const persistPath = path.join(__dirname, '..', 'data', 'peyos-state.json');
