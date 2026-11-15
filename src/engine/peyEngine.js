@@ -347,7 +347,10 @@ class PeyEngine extends EventEmitter {
         processedWebhookIds: Array.from(this.processedWebhookIds).slice(-200),
         processedTransactionIds: Array.from(this.processedTransactionIds).slice(-200),
       };
-      fs.writeFileSync(this.persistPath, JSON.stringify(payload, null, 2), 'utf8');
+      // Escribir y renombrar: un fallo a medias no corrompe el estado anterior
+      const tmpPath = `${this.persistPath}.tmp`;
+      fs.writeFileSync(tmpPath, JSON.stringify(payload, null, 2), 'utf8');
+      fs.renameSync(tmpPath, this.persistPath);
     } catch (_err) {
       // Ignorar errores de escritura en entornos de solo lectura
     }
@@ -801,7 +804,8 @@ class PeyEngine extends EventEmitter {
 
       const word = String(meta.muralWord || order.concept || 'PEY LIVE').toUpperCase().slice(0, 18);
       const colors = ['#10b981', '#6366f1', '#f59e0b', '#ec4899', '#06b6d4', '#a855f7'];
-      const color = meta.tileColor || colors[this.liveStudio.muralTiles.length % colors.length];
+      // tileColor viene del cliente y termina dentro de style=""; solo #hex
+      const color = /^#[0-9a-f]{6}$/i.test(meta.tileColor || '') ? meta.tileColor : colors[this.liveStudio.muralTiles.length % colors.length];
       this.liveStudio.muralTiles.unshift({
         id: `tile_${order.orderId}`,
         word,

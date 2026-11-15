@@ -489,3 +489,40 @@ test('18. Un PIN viejo no abre un casillero que ya reservó otra persona', async
   assert.equal(engine.lockers['LOCKER-A1'].status, 'RESERVED_WAITING_PAYMENT');
   assert.equal(engine.lockers['LOCKER-A1'].activeOrderId, second.orderId);
 });
+
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+
+test('19. El color de baldosa solo acepta #hex; lo demás usa la paleta', async () => {
+  const engine = new PeyEngine();
+  const evil = await engine.createOrder({ station: 'synth', metadata: { tileColor: 'red;background:url(//x)' } });
+  engine.simulateSignedWebhookForOrder(evil.orderId, 'SUCCESS');
+  assert.match(engine.liveStudio.muralTiles[0].color, /^#[0-9a-f]{6}$/i);
+  assert.ok(!engine.liveStudio.muralTiles[0].color.includes('url'));
+
+  const ok = await engine.createOrder({ station: 'synth', metadata: { tileColor: '#ABCDEF' } });
+  engine.simulateSignedWebhookForOrder(ok.orderId, 'SUCCESS');
+  assert.equal(engine.liveStudio.muralTiles[0].color, '#ABCDEF');
+});
+
+test('20. Si la escritura del estado falla a medias, el archivo anterior queda intacto', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'peyos-'));
+  const persistPath = path.join(dir, 'state.json');
+  const engine = new PeyEngine({ persistPath });
+  engine.updateStudioSequencer({ bpm: 100 });
+  const before = fs.readFileSync(persistPath, 'utf8');
+
+  const realRename = fs.renameSync;
+  fs.renameSync = () => {
+    throw new Error('disco lleno');
+  };
+  try {
+    engine.updateStudioSequencer({ bpm: 150 });
+  } finally {
+    fs.renameSync = realRename;
+  }
+  assert.equal(fs.readFileSync(persistPath, 'utf8'), before);
+  assert.equal(JSON.parse(before).liveStudio.bpm, 100);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
