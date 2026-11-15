@@ -1,0 +1,4 @@
+# Test fixtures, not real credentials: the Standard Webhooks spec reference secret and fake live-mode keys.
+eae6f692838de50e9d5096edcd0cc0c258ca504e:test/peyos.test.js:generic-api-key:220
+eae6f692838de50e9d5096edcd0cc0c258ca504e:test/peyos.test.js:generic-api-key:229
+337274895f6cac03ed292e47a5f57c61865f92b8:test/peyos.test.js:generic-api-key:356
