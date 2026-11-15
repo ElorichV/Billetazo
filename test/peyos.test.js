@@ -107,7 +107,7 @@ test('4. Separa Pago de Identidad/Entrega: Smart Locker requiere OTP de un solo 
   }, /ya fue utilizado/);
 
   // Liberación manual de la unidad cuando el usuario termina
-  const released = engine.releaseLocker('LOCKER-A1');
+  const released = engine.releaseLocker('LOCKER-A1', order.claimToken);
   assert.equal(released.status, 'LOCKED_IDLE');
   assert.equal(released.remainingSeconds, 0);
 });
@@ -392,4 +392,100 @@ test('14. JSON malformado es 400 y errores internos son 500 sin filtrar detalles
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }
+});
+
+function signedPayment(engine, order, amount, extra = {}) {
+  const body = JSON.stringify({
+    type: 'codi.qr.payment_received',
+    ...(amount === undefined ? {} : { amount }),
+    numRef: String(order.numRef),
+    transactionId: `01TXN${Math.random().toString(16).slice(2)}`,
+    datePaid: Math.floor(Date.now() / 1000),
+    metadata: { externalMetadata: { orderId: order.orderId } },
+    ...extra,
+  });
+  return engine.processWebhook(body, signStandardWebhook(body, engine.peyClient.webhookSecret));
+}
+
+test('15. Un pago menor al monto de la orden no emite PIN ni ejecuta efectos', async () => {
+  const engine = new PeyEngine();
+  const order = await engine.createOrder({ station: 'locker', amount: 0.05, metadata: { lockerId: 'LOCKER-A1' } });
+
+  const under = signedPayment(engine, order, 0.01);
+  assert.equal(under.status, 'AMOUNT_MISMATCH');
+  assert.equal(engine.orders.get(order.orderId).status, 'UNDERPAID');
+  assert.equal(engine.orders.get(order.orderId).otpCode, null);
+  assert.equal(engine.lockers['LOCKER-A1'].status, 'RESERVED_WAITING_PAYMENT');
+  assert.equal(engine.metrics.totalPaidOrders, 0);
+
+  const order2 = await engine.createOrder({ station: 'pos', amount: 0.05 });
+  assert.equal(signedPayment(engine, order2, undefined).status, 'AMOUNT_MISMATCH');
+
+  const order3 = await engine.createOrder({ station: 'pos', amount: 0.05 });
+  assert.equal(signedPayment(engine, order3, 0.05).status, 'PAID_AND_EXECUTED');
+  assert.equal(engine.metrics.totalPaidOrders, 1);
+});
+
+test('16. Casilleros: id desconocido o unidad ocupada se rechazan y la reserva vence', async () => {
+  const engine = new PeyEngine();
+  await assert.rejects(
+    engine.createOrder({ station: 'locker', metadata: { lockerId: 'NO-EXISTE' } }),
+    /Unidad/
+  );
+  await assert.rejects(engine.createOrder({ station: 'locker', metadata: {} }), /Unidad/);
+
+  const first = await engine.createOrder({ station: 'locker', ttlSeconds: 60, metadata: { lockerId: 'POD-CARGA-B2' } });
+  await assert.rejects(
+    engine.createOrder({ station: 'locker', metadata: { lockerId: 'POD-CARGA-B2' } }),
+    /ocupada/
+  );
+
+  // La reserva sin pago vence y libera la unidad
+  engine.orders.get(first.orderId).expiresAt = Date.now() - 1;
+  engine.tickTimers();
+  assert.equal(engine.lockers['POD-CARGA-B2'].status, 'LOCKED_IDLE');
+
+  // Otro cliente la reserva; el pago tardío del primero no la secuestra
+  const second = await engine.createOrder({ station: 'locker', metadata: { lockerId: 'POD-CARGA-B2' } });
+  // Pagado a tiempo según el banco, pero el webhook llegó después de liberar la unidad
+  const paidInTime = Math.floor(engine.orders.get(first.orderId).expiresAt / 1000) - 10;
+  const latePay = signedPayment(engine, first, first.amount, { datePaid: paidInTime });
+  assert.equal(latePay.status, 'LATE_PAYMENT_VOUCHER_ISSUED');
+  assert.equal(engine.lockers['POD-CARGA-B2'].activeOrderId, second.orderId);
+  assert.equal(engine.lockers['POD-CARGA-B2'].status, 'RESERVED_WAITING_PAYMENT');
+});
+
+test('17. Solo quien tiene el claimToken de la orden activa puede cerrar el casillero', async () => {
+  const { server, engine } = createAppServer();
+  await new Promise((resolve) => server.listen(0, resolve));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  try {
+    const order = await engine.createOrder({ station: 'locker', metadata: { lockerId: 'SALA-API-C3' } });
+    signedPayment(engine, order, order.amount);
+    engine.verifyDeliveryOtp({ orderId: order.orderId, otpCode: engine.orders.get(order.orderId).otpCode });
+    assert.equal(engine.lockers['SALA-API-C3'].status, 'UNLOCKED_ACTIVE');
+
+    const url = `${base}/api/lockers/SALA-API-C3/release`;
+    assert.equal((await fetch(url, { method: 'POST' })).status, 403);
+    assert.equal(engine.lockers['SALA-API-C3'].status, 'UNLOCKED_ACTIVE');
+
+    const ok = await fetch(url, { method: 'POST', headers: { 'x-claim-token': order.claimToken } });
+    assert.equal(ok.status, 200);
+    assert.equal(engine.lockers['SALA-API-C3'].status, 'LOCKED_IDLE');
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test('18. Un PIN viejo no abre un casillero que ya reservó otra persona', async () => {
+  const engine = new PeyEngine();
+  const first = await engine.createOrder({ station: 'locker', metadata: { lockerId: 'LOCKER-A1' } });
+  signedPayment(engine, first, first.amount);
+  engine.releaseLocker('LOCKER-A1', first.claimToken);
+
+  const second = await engine.createOrder({ station: 'locker', metadata: { lockerId: 'LOCKER-A1' } });
+  engine.verifyDeliveryOtp({ orderId: first.orderId, otpCode: engine.orders.get(first.orderId).otpCode });
+
+  assert.equal(engine.lockers['LOCKER-A1'].status, 'RESERVED_WAITING_PAYMENT');
+  assert.equal(engine.lockers['LOCKER-A1'].activeOrderId, second.orderId);
 });
