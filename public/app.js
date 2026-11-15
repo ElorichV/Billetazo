@@ -206,12 +206,20 @@
     setTimeout(() => el.remove(), 4200);
   }
 
+  let adminToken = '';
+
   async function apiPost(url, body = {}) {
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
+    const headers = { 'Content-Type': 'application/json' };
+    if (adminToken) headers['x-admin-token'] = adminToken;
+    const res = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body) });
+    if (res.status === 403 && !adminToken) {
+      const token = window.prompt('Token de administrador para esta acción:');
+      if (token) {
+        adminToken = token.trim();
+        return apiPost(url, body);
+      }
+    }
+    if (res.status === 403) adminToken = '';
     const data = await res.json();
     if (!res.ok || data.ok === false) {
       throw new Error(data.error || data.reason || 'Error en la operación.');

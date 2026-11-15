@@ -1,4 +1,5 @@
 const http = require('node:http');
+const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const { PeyEngine } = require('./engine/peyEngine');
@@ -64,6 +65,20 @@ function sendJson(res, statusCode, data) {
   res.end(payload);
 }
 
+// Rutas que pueden marcar órdenes como pagadas o cambiar credenciales.
+// Con PEYOS_ADMIN_TOKEN exigen la cabecera x-admin-token; sin él solo funcionan fuera de producción.
+function isAdminRequest(req) {
+  const token = process.env.PEYOS_ADMIN_TOKEN;
+  if (!token) {
+    return process.env.NODE_ENV !== 'production';
+  }
+  const provided = Buffer.from(String(req.headers['x-admin-token'] || ''), 'utf8');
+  const expected = Buffer.from(token, 'utf8');
+  return provided.length === expected.length && crypto.timingSafeEqual(provided, expected);
+}
+
+const ADMIN_PATHS = new Set(['/api/chaos/simulate', '/api/webhooks/dispatch', '/api/config/pey']);
+
 function createAppServer(engineInstance) {
   const engine = engineInstance || new PeyEngine();
   const sseClients = new Set();
@@ -90,6 +105,11 @@ function createAppServer(engineInstance) {
     try {
       const parsedUrl = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
       const pathname = parsedUrl.pathname;
+
+      if (ADMIN_PATHS.has(pathname) && !isAdminRequest(req)) {
+        sendJson(res, 403, { ok: false, error: 'Requiere token de administrador.' });
+        return;
+      }
 
       // 1. SSE Real-Time Stream
       if (req.method === 'GET' && pathname === '/api/events') {

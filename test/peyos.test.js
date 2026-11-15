@@ -249,3 +249,45 @@ test('10. Sin PEY_WEBHOOK_SECRET no usa un secreto fijo conocido', () => {
     if (saved !== undefined) process.env.PEY_WEBHOOK_SECRET = saved;
   }
 });
+
+test('11. Rutas de simulación y configuración exigen token de administrador en producción', async () => {
+  const saved = { env: process.env.NODE_ENV, token: process.env.PEYOS_ADMIN_TOKEN };
+  process.env.NODE_ENV = 'production';
+  delete process.env.PEYOS_ADMIN_TOKEN;
+  const { server, engine } = createAppServer();
+  await new Promise((resolve) => server.listen(0, resolve));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const post = (url, body, headers = {}) =>
+    fetch(`${base}${url}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...headers },
+      body: JSON.stringify(body),
+    });
+
+  try {
+    const order = await engine.createOrder({ station: 'pos', method: 'QR' });
+    const secretBefore = engine.peyClient.webhookSecret;
+
+    // Sin token configurado: deshabilitadas
+    for (const url of ['/api/chaos/simulate', '/api/webhooks/dispatch']) {
+      assert.equal((await post(url, { orderId: order.orderId })).status, 403);
+    }
+    assert.equal((await post('/api/config/pey', { webhookSecret: 'whsec_attacker' })).status, 403);
+    assert.equal(engine.peyClient.webhookSecret, secretBefore);
+    assert.equal(engine.orders.get(order.orderId).status, 'QR_READY');
+
+    // Con token configurado: solo con la cabecera correcta
+    process.env.PEYOS_ADMIN_TOKEN = 'admin-token-123';
+    const wrong = await post('/api/chaos/simulate', { orderId: order.orderId }, { 'x-admin-token': 'nope' });
+    assert.equal(wrong.status, 403);
+    const ok = await post('/api/chaos/simulate', { orderId: order.orderId }, { 'x-admin-token': 'admin-token-123' });
+    assert.equal(ok.status, 200);
+    assert.equal(engine.orders.get(order.orderId).status, 'OTP_ISSUED');
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    if (saved.env === undefined) delete process.env.NODE_ENV;
+    else process.env.NODE_ENV = saved.env;
+    if (saved.token === undefined) delete process.env.PEYOS_ADMIN_TOKEN;
+    else process.env.PEYOS_ADMIN_TOKEN = saved.token;
+  }
+});
