@@ -1,0 +1,14 @@
+services:
+  - type: web
+    name: peyos-live
+    runtime: node
+    plan: free
+    buildCommand: npm ci
+    startCommand: HOST=0.0.0.0 node src/server.js
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: HOST
+        value: 0.0.0.0
+      - key: PEY_API_BASE_URL
+        value: https://api.pey.mx

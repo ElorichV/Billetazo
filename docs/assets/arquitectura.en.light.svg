@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 560 720" width="560" height="720" role="img" aria-label="PeyOS Architecture: CoDi charge, webhook verification, OTP issuance, and real-time station activation">
+  <rect width="560" height="720" fill="#F8FAFC" rx="16" stroke="#CBD5E1" stroke-width="2"/>
+  
+  <text x="280" y="46" text-anchor="middle" fill="#0F172A" font-family="system-ui, -apple-system, sans-serif" font-size="26" font-weight="700">PeyOS Architecture · CoDi Flow</text>
+  <text x="280" y="74" text-anchor="middle" fill="#475569" font-family="system-ui, -apple-system, sans-serif" font-size="18">Server confirmation, idempotency, and PIN delivery</text>
+
+  <rect x="40" y="100" width="480" height="96" rx="12" fill="#FFFFFF" stroke="#0284C7" stroke-width="2"/>
+  <text x="64" y="136" fill="#0F172A" font-family="system-ui, -apple-system, sans-serif" font-size="22" font-weight="700">1. Payment Request ($0.01 MXN)</text>
+  <text x="64" y="166" fill="#334155" font-family="system-ui, -apple-system, sans-serif" font-size="18">POST /api/orders · QR (/codi/qr) or Push (/codi/pn)</text>
+
+  <line x1="280" y1="196" x2="280" y2="230" stroke="#475569" stroke-width="3"/>
+  <polygon points="273,226 287,226 280,238" fill="#475569"/>
+
+  <rect x="40" y="240" width="480" height="96" rx="12" fill="#FFFFFF" stroke="#4F46E5" stroke-width="2"/>
+  <text x="64" y="276" fill="#0F172A" font-family="system-ui, -apple-system, sans-serif" font-size="22" font-weight="700">2. Banxico CoDi Network &amp; pey.mx API</text>
+  <text x="64" y="306" fill="#334155" font-family="system-ui, -apple-system, sans-serif" font-size="18">Direct settlement to 5 CLABEs (BBVA, Santander, Azteca)</text>
+
+  <line x1="280" y1="336" x2="280" y2="370" stroke="#475569" stroke-width="3"/>
+  <polygon points="273,366 287,366 280,378" fill="#475569"/>
+
+  <rect x="40" y="380" width="480" height="110" rx="12" fill="#F0FDF4" stroke="#059669" stroke-width="2"/>
+  <text x="64" y="416" fill="#065F46" font-family="system-ui, -apple-system, sans-serif" font-size="22" font-weight="700">3. Signed &amp; Idempotent Webhook</text>
+  <text x="64" y="446" fill="#1E293B" font-family="system-ui, -apple-system, sans-serif" font-size="18">Verifies HMAC-SHA256 and deduplicates webhook-id</text>
+  <text x="64" y="472" fill="#334155" font-family="system-ui, -apple-system, sans-serif" font-size="18">Late payments issue signed VCHR credit voucher</text>
+
+  <line x1="280" y1="490" x2="280" y2="524" stroke="#475569" stroke-width="3"/>
+  <polygon points="273,520 287,520 280,532" fill="#475569"/>
+
+  <rect x="40" y="534" width="480" height="146" rx="12" fill="#FFFBEB" stroke="#D97706" stroke-width="2"/>
+  <text x="64" y="570" fill="#92400E" font-family="system-ui, -apple-system, sans-serif" font-size="22" font-weight="700">4. One-Time PIN &amp; Live Stations (SSE)</text>
+  <text x="64" y="600" fill="#0F172A" font-family="system-ui, -apple-system, sans-serif" font-size="18">• PeyStudio: Web Audio Synthesizer &amp; Shared Mural</text>
+  <text x="64" y="628" fill="#0F172A" font-family="system-ui, -apple-system, sans-serif" font-size="18">• Smart Lockers: Unlocked via 6-digit OTP</text>
+  <text x="64" y="656" fill="#0F172A" font-family="system-ui, -apple-system, sans-serif" font-size="18">• Split-Pay Reconciliation &amp; Sponsored Meals POS</text>
+</svg>

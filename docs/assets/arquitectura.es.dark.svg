@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 560 720" width="560" height="720" role="img" aria-label="Arquitectura de PeyOS: cobro CoDi, verificación de webhook, emisión de OTP y activación en tiempo real">
+  <rect width="560" height="720" fill="#0B1120" rx="16"/>
+  
+  <!-- Header -->
+  <text x="280" y="46" text-anchor="middle" fill="#F8FAFC" font-family="system-ui, -apple-system, sans-serif" font-size="26" font-weight="700">Arquitectura PeyOS · Flujo CoDi</text>
+  <text x="280" y="74" text-anchor="middle" fill="#94A3B8" font-family="system-ui, -apple-system, sans-serif" font-size="18">Confirmación en servidor, idempotencia y entrega con PIN</text>
+
+  <!-- Node 1: Cliente / Terminal -->
+  <rect x="40" y="100" width="480" height="96" rx="12" fill="#1E293B" stroke="#38BDF8" stroke-width="2"/>
+  <text x="64" y="136" fill="#F8FAFC" font-family="system-ui, -apple-system, sans-serif" font-size="22" font-weight="700">1. Solicitud de Cobro ($0.01 MXN)</text>
+  <text x="64" y="166" fill="#CBD5E1" font-family="system-ui, -apple-system, sans-serif" font-size="18">POST /api/orders · QR (/codi/qr) o Push (/codi/pn)</text>
+
+  <!-- Arrow 1 -> 2 -->
+  <line x1="280" y1="196" x2="280" y2="230" stroke="#64748B" stroke-width="3"/>
+  <polygon points="273,226 287,226 280,238" fill="#64748B"/>
+
+  <!-- Node 2: API pey.mx & Banxico -->
+  <rect x="40" y="240" width="480" height="96" rx="12" fill="#1E293B" stroke="#818CF8" stroke-width="2"/>
+  <text x="64" y="276" fill="#F8FAFC" font-family="system-ui, -apple-system, sans-serif" font-size="22" font-weight="700">2. Red CoDi Banxico y API pey.mx</text>
+  <text x="64" y="306" fill="#CBD5E1" font-family="system-ui, -apple-system, sans-serif" font-size="18">Liquida en 5 CLABEs (BBVA, Santander, Azteca)</text>
+
+  <!-- Arrow 2 -> 3 -->
+  <line x1="280" y1="336" x2="280" y2="370" stroke="#64748B" stroke-width="3"/>
+  <polygon points="273,366 287,366 280,378" fill="#64748B"/>
+
+  <!-- Node 3: Verificador Standard Webhooks -->
+  <rect x="40" y="380" width="480" height="110" rx="12" fill="#0F172A" stroke="#10B981" stroke-width="2"/>
+  <text x="64" y="416" fill="#34D399" font-family="system-ui, -apple-system, sans-serif" font-size="22" font-weight="700">3. Webhook Seguro e Idempotente</text>
+  <text x="64" y="446" fill="#E2E8F0" font-family="system-ui, -apple-system, sans-serif" font-size="18">Valida HMAC-SHA256 y deduplica webhook-id</text>
+  <text x="64" y="472" fill="#94A3B8" font-family="system-ui, -apple-system, sans-serif" font-size="18">Pagos tardíos emiten voucher firmado VCHR</text>
+
+  <!-- Arrow 3 -> 4 -->
+  <line x1="280" y1="490" x2="280" y2="524" stroke="#64748B" stroke-width="3"/>
+  <polygon points="273,520 287,520 280,532" fill="#64748B"/>
+
+  <!-- Node 4: Emisión de OTP y Estaciones SSE -->
+  <rect x="40" y="534" width="480" height="146" rx="12" fill="#1E293B" stroke="#F59E0B" stroke-width="2"/>
+  <text x="64" y="570" fill="#FDE68A" font-family="system-ui, -apple-system, sans-serif" font-size="22" font-weight="700">4. PIN OTP y 4 Estaciones en Vivo (SSE)</text>
+  <text x="64" y="600" fill="#F8FAFC" font-family="system-ui, -apple-system, sans-serif" font-size="18">• PeyStudio: Sintetizador Web Audio y Mural</text>
+  <text x="64" y="628" fill="#F8FAFC" font-family="system-ui, -apple-system, sans-serif" font-size="18">• Smart Lockers: Desbloqueo por PIN de 6 dígitos</text>
+  <text x="64" y="656" fill="#F8FAFC" font-family="system-ui, -apple-system, sans-serif" font-size="18">• Vaquita Split-Pay y POS Comidas Patrocinadas</text>
+</svg>
