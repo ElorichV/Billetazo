@@ -213,3 +213,39 @@ test('7. Servidor HTTP responde en /api/state, /api/orders, /api/clabes/validate
     await new Promise((resolve) => server.close(resolve));
   }
 });
+
+const { verifyStandardWebhook, PeyClient } = require('../src/services/peyClient');
+
+test('8. Verifica la firma con el vector oficial de Standard Webhooks (secreto base64)', () => {
+  const secret = 'whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw';
+  const webhookId = 'msg_p5jXN8AQM9LWM0D4loKWxJek';
+  const timestamp = '1614265330';
+  const body = '{"test": 2432232314}';
+  const headers = signStandardWebhook(body, secret, webhookId, timestamp);
+  assert.equal(headers['webhook-signature'], 'v1,g0hM9SsE+OTPJTGt/tmIKtSyZlE3uFJELVlNIOLJ1OE=');
+});
+
+test('9. Rechaza webhooks con timestamp fuera de la ventana de 5 minutos (replay)', () => {
+  const secret = 'whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw';
+  const body = '{"type":"codi.qr.payment_received"}';
+  const stale = String(Math.floor(Date.now() / 1000) - 301);
+  const staleCheck = verifyStandardWebhook(body, signStandardWebhook(body, secret, 'msg_old', stale), secret);
+  assert.equal(staleCheck.valid, false);
+  assert.match(staleCheck.reason, /timestamp/i);
+
+  const fresh = verifyStandardWebhook(body, signStandardWebhook(body, secret, 'msg_new'), secret);
+  assert.equal(fresh.valid, true);
+});
+
+test('10. Sin PEY_WEBHOOK_SECRET no usa un secreto fijo conocido', () => {
+  const saved = process.env.PEY_WEBHOOK_SECRET;
+  delete process.env.PEY_WEBHOOK_SECRET;
+  try {
+    const a = new PeyClient();
+    const b = new PeyClient();
+    assert.notEqual(a.webhookSecret, b.webhookSecret);
+    assert.ok(!a.webhookSecret.includes('peyos'));
+  } finally {
+    if (saved !== undefined) process.env.PEY_WEBHOOK_SECRET = saved;
+  }
+});

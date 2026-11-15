@@ -293,6 +293,10 @@ function createAppServer(engineInstance) {
 }
 
 if (require.main === module) {
+  if (process.env.NODE_ENV === 'production' && !process.env.PEY_WEBHOOK_SECRET) {
+    console.error('PEY_WEBHOOK_SECRET es obligatorio en producción.');
+    process.exit(1);
+  }
   const port = Number(process.env.PORT || 3000);
   const host = process.env.HOST || '127.0.0.1';
   const persistPath = path.join(__dirname, '..', 'data', 'peyos-state.json');
