@@ -343,3 +343,53 @@ test('12. El PIN OTP solo lo recibe quien creó la orden (no viaja en snapshot, 
     await new Promise((resolve) => server.close(resolve));
   }
 });
+
+const http = require('node:http');
+
+test('13. En modo LIVE un fallo de api.pey.mx es error 502, no un QR local falso', async () => {
+  const upstream = http.createServer((_req, res) => {
+    res.writeHead(500, { 'Content-Type': 'application/json' });
+    res.end('{"error":"down"}');
+  });
+  await new Promise((resolve) => upstream.listen(0, resolve));
+  const baseUrl = `http://127.0.0.1:${upstream.address().port}`;
+  const client = new PeyClient({ apiKey: 'live_key_123456', baseUrl, webhookSecret: 'whsec_dGVzdA==' });
+  const { server } = createAppServer(new PeyEngine({ peyClient: client }));
+  await new Promise((resolve) => server.listen(0, resolve));
+  const base = `http://127.0.0.1:${server.address().port}`;
+
+  try {
+    await assert.rejects(client.createCodiQr({ amount: 0.01 }), (err) => err.statusCode === 502);
+    await assert.rejects(client.createCodiPushNotification({ phone: '5512345678' }), (err) => err.statusCode === 502);
+    await assert.rejects(client.registerBankAccount({ clabe: '012180015826225713' }), (err) => err.statusCode === 502);
+
+    const res = await fetch(`${base}/api/orders`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ station: 'pos', method: 'QR' }),
+    });
+    assert.equal(res.status, 502);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    await new Promise((resolve) => upstream.close(resolve));
+  }
+});
+
+test('14. JSON malformado es 400 y errores internos son 500 sin filtrar detalles', async () => {
+  const { server, engine } = createAppServer();
+  await new Promise((resolve) => server.listen(0, resolve));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  try {
+    const bad = await fetch(`${base}/api/orders`, { method: 'POST', body: '{not json' });
+    assert.equal(bad.status, 400);
+
+    engine.getSnapshot = () => {
+      throw new TypeError('detalle interno secreto');
+    };
+    const crash = await fetch(`${base}/api/state`);
+    assert.equal(crash.status, 500);
+    assert.ok(!(await crash.text()).includes('detalle interno secreto'));
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
