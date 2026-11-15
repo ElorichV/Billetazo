@@ -1,0 +1,733 @@
+<!DOCTYPE html>
+<html lang="es-MX">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PeyOS · Plataforma CoDi en Tiempo Real, POS, Smart Lockers, Split-Pay & PeyStudio</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <a class="skip-link" href="#main-workspace">Saltar al contenido principal</a>
+
+  <!-- Barra Superior de Navegación y Estado Operativo -->
+  <header class="app-header">
+    <div class="brand-cluster">
+      <div class="brand-emblem" aria-hidden="true">
+        <span class="emblem-bolt">⚡</span>
+      </div>
+      <div>
+        <div class="brand-title-row">
+          <h1>PeyOS</h1>
+          <span class="pill-codi">CoDi Instantáneo</span>
+        </div>
+        <p class="brand-subtitle">Pagos verificados por webhook · Entrega por PIN OTP · Conciliación Multi-CLABE</p>
+      </div>
+    </div>
+
+    <!-- Navegación Principal por Módulos enfocada en UX -->
+    <nav class="module-tabs" role="tablist" aria-label="Módulos de PeyOS">
+      <button type="button" role="tab" aria-selected="true" aria-controls="view-pos" id="tab-btn-pos" class="tab-btn active" data-tab="pos">
+        <span class="tab-icon" aria-hidden="true">🏪</span>
+        <span>POS &amp; Comedor</span>
+      </button>
+      <button type="button" role="tab" aria-selected="false" aria-controls="view-lockers" id="tab-btn-lockers" class="tab-btn" data-tab="lockers">
+        <span class="tab-icon" aria-hidden="true">🔐</span>
+        <span>Smart Lockers</span>
+        <span id="nav-badge-lockers" class="tab-badge" hidden>0</span>
+      </button>
+      <button type="button" role="tab" aria-selected="false" aria-controls="view-split" id="tab-btn-split" class="tab-btn" data-tab="split">
+        <span class="tab-icon" aria-hidden="true">🤝</span>
+        <span>Vaquita Split</span>
+      </button>
+      <button type="button" role="tab" aria-selected="false" aria-controls="view-studio" id="tab-btn-studio" class="tab-btn" data-tab="studio">
+        <span class="tab-icon" aria-hidden="true">🎹</span>
+        <span>PeyStudio</span>
+      </button>
+      <button type="button" role="tab" aria-selected="false" aria-controls="view-clabes" id="tab-btn-clabes" class="tab-btn" data-tab="clabes">
+        <span class="tab-icon" aria-hidden="true">🏦</span>
+        <span>Cuentas &amp; Monitor</span>
+      </button>
+    </nav>
+
+    <div class="header-actions">
+      <div id="sse-indicator" class="connection-pill online" role="status" aria-live="polite" title="Stream SSE en tiempo real">
+        <span class="pulse-dot"></span>
+        <span id="sse-text">En línea</span>
+      </div>
+      <button id="btn-audio-toggle" type="button" class="btn btn-glass" aria-pressed="false" title="Activar sintetizador Web Audio">
+        🔇 Audio: Off
+      </button>
+      <button id="btn-open-config" type="button" class="btn btn-glass" title="Configurar credenciales de api.pey.mx">
+        <span id="api-mode-dot" class="mode-dot"></span>
+        <span id="api-mode-badge">API Pey</span>
+      </button>
+      <button id="btn-open-custom-order" type="button" class="btn btn-primary-glow">
+        ⚡ Nuevo Cobro CoDi
+      </button>
+    </div>
+  </header>
+
+  <!-- Cinta Visual de KPIs Operativos -->
+  <section class="kpi-strip" aria-label="Indicadores operativos en tiempo real">
+    <div class="kpi-pill">
+      <span class="kpi-icon" aria-hidden="true">🧾</span>
+      <div>
+        <span class="kpi-label">Órdenes Generadas</span>
+        <strong id="metric-orders" class="kpi-val">0</strong>
+      </div>
+    </div>
+    <div class="kpi-pill kpi-emerald">
+      <span class="kpi-icon" aria-hidden="true">💸</span>
+      <div>
+        <span class="kpi-label">Volumen Liquidado</span>
+        <strong id="metric-paid" class="kpi-val">0 ($0.00 MXN)</strong>
+      </div>
+    </div>
+    <div class="kpi-pill kpi-cyan">
+      <span class="kpi-icon" aria-hidden="true">🔓</span>
+      <div>
+        <span class="kpi-label">Entregas con PIN OTP</span>
+        <strong id="metric-otp" class="kpi-val">0</strong>
+      </div>
+    </div>
+    <div class="kpi-pill kpi-indigo">
+      <span class="kpi-icon" aria-hidden="true">🛡️</span>
+      <div>
+        <span class="kpi-label">Duplicados Bloqueados</span>
+        <strong id="metric-duplicates" class="kpi-val">0</strong>
+      </div>
+    </div>
+    <div class="kpi-pill kpi-amber">
+      <span class="kpi-icon" aria-hidden="true">🎟️</span>
+      <div>
+        <span class="kpi-label">Vouchers Pago Tardío</span>
+        <strong id="metric-late" class="kpi-val">0</strong>
+      </div>
+    </div>
+    <div class="kpi-pill kpi-purple">
+      <span class="kpi-icon" aria-hidden="true">🔄</span>
+      <div>
+        <span class="kpi-label">Failovers Multi-CLABE</span>
+        <strong id="metric-failovers" class="kpi-val">0</strong>
+      </div>
+    </div>
+  </section>
+
+  <!-- Área de Trabajo Principal con Paneles por Módulo + Terminal CoDi Lateral -->
+  <main id="main-workspace" class="app-layout">
+    <div class="views-container">
+
+      <!-- =================================================================
+           VISTA 1: PUNTO DE VENTA (POS) & COMEDOR COMUNITARIO CON PIN OTP
+           ================================================================= -->
+      <section id="view-pos" role="tabpanel" aria-labelledby="tab-btn-pos" class="module-view active">
+        <div class="view-hero">
+          <div>
+            <span class="eyebrow">PUNTO DE VENTA &amp; ENTREGA VERIFICADA</span>
+            <h2>Catálogo CoDi &amp; Tablero de Entregas sin Capturas Falsas</h2>
+            <p>Selecciona un producto o patrocina una comida solidaria. El pago se confirma por webhook desde el servidor y emite un PIN de 6 dígitos que el comercio valida al entregar.</p>
+          </div>
+          <div class="hero-stats-pair">
+            <div class="mini-stat-box">
+              <span>Comidas Financiadas</span>
+              <strong id="meals-funded">0</strong>
+            </div>
+            <div class="mini-stat-box">
+              <span>Entregadas con PIN</span>
+              <strong id="meals-delivered">0</strong>
+            </div>
+            <div class="mini-stat-box accent">
+              <span>Disponibles Hoy</span>
+              <strong id="meals-available">0</strong>
+            </div>
+          </div>
+        </div>
+
+        <!-- Catálogo Visual de Productos -->
+        <div class="section-title-bar">
+          <h3>🛍️ Cobro Rápido en Mostrador</h3>
+          <button id="btn-quick-meal" type="button" class="btn btn-emerald btn-sm">
+            🍲 + Patrocinar Comida Solidaria ($0.01)
+          </button>
+        </div>
+        <div id="pos-catalog-grid" class="pos-catalog-grid" aria-label="Catálogo de productos"></div>
+
+        <!-- Kanban de Órdenes y Comedor Solidario -->
+        <div class="kanban-grid">
+          <div class="kanban-col">
+            <div class="kanban-col-header">
+              <span class="status-dot dot-amber"></span>
+              <h3>1. Esperando Pago CoDi</h3>
+              <span id="kanban-count-pending" class="count-pill">0</span>
+            </div>
+            <div id="kanban-pending-list" class="kanban-cards"></div>
+          </div>
+
+          <div class="kanban-col kanban-col-highlight">
+            <div class="kanban-col-header">
+              <span class="status-dot dot-cyan"></span>
+              <h3>2. Pagado · Validar PIN para Entregar</h3>
+              <span id="kanban-count-otp" class="count-pill">0</span>
+            </div>
+            <div id="kanban-otp-list" class="kanban-cards"></div>
+          </div>
+
+          <div class="kanban-col">
+            <div class="kanban-col-header">
+              <span class="status-dot dot-emerald"></span>
+              <h3>3. Comedor Solidario &amp; Entregados</h3>
+              <span id="kanban-count-done" class="count-pill">0</span>
+            </div>
+            <div id="meals-list" class="kanban-cards"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- =================================================================
+           VISTA 2: SMART LOCKERS & CABINAS CON TECLADO FÍSICO OTP
+           ================================================================= -->
+      <section id="view-lockers" role="tabpanel" aria-labelledby="tab-btn-lockers" class="module-view" hidden>
+        <div class="view-hero">
+          <div>
+            <span class="eyebrow">INFRAESTRUCTURA FÍSICA &amp; ACCESO POR TIEMPO</span>
+            <h2>Smart Lockers &amp; Cabinas con Separación Pago ≠ Identidad</h2>
+            <p>Pagar reserva la unidad pero no abre la puerta a ciegas: el servidor emite un PIN único de 6 dígitos que el usuario ingresa en el teclado físico para liberar el cerrojo e iniciar su sesión.</p>
+          </div>
+        </div>
+
+        <div class="lockers-workspace">
+          <!-- Matriz Visual 3D de Casilleros y Cabinas -->
+          <div id="lockers-grid" class="lockers-visual-grid" aria-label="Unidades de casilleros y cabinas"></div>
+
+          <!-- Terminal Física de PIN (Keypad Interactivo) -->
+          <aside class="kiosk-keypad-card" aria-label="Teclado numérico de liberación por PIN">
+            <div class="kiosk-header">
+              <span class="kiosk-badge">TERMINAL DE DESBLOQUEO</span>
+              <h3>Teclado de Validación OTP</h3>
+              <p class="small-muted">Selecciona tu orden pagada e ingresa el PIN de 6 dígitos para abrir la compuerta.</p>
+            </div>
+
+            <div class="kiosk-screen">
+              <div class="kiosk-screen-label" id="kiosk-target-label">Ingresa tu código de 6 dígitos</div>
+              <div class="kiosk-pin-display" id="kiosk-pin-display" aria-live="polite">_ _ _ _ _ _</div>
+            </div>
+
+            <div class="kiosk-numpad" role="group" aria-label="Teclado numérico">
+              <button type="button" class="numpad-key" data-numpad="1">1</button>
+              <button type="button" class="numpad-key" data-numpad="2">2</button>
+              <button type="button" class="numpad-key" data-numpad="3">3</button>
+              <button type="button" class="numpad-key" data-numpad="4">4</button>
+              <button type="button" class="numpad-key" data-numpad="5">5</button>
+              <button type="button" class="numpad-key" data-numpad="6">6</button>
+              <button type="button" class="numpad-key" data-numpad="7">7</button>
+              <button type="button" class="numpad-key" data-numpad="8">8</button>
+              <button type="button" class="numpad-key" data-numpad="9">9</button>
+              <button type="button" class="numpad-key key-clear" data-numpad="CLEAR">Borrar</button>
+              <button type="button" class="numpad-key" data-numpad="0">0</button>
+              <button type="button" class="numpad-key key-enter" data-numpad="ENTER">🔓 Abrir</button>
+            </div>
+          </aside>
+        </div>
+      </section>
+
+      <!-- =================================================================
+           VISTA 3: VAQUITA SPLIT-PAY MULTI-CLABE & CONCILIACIÓN
+           ================================================================= -->
+      <section id="view-split" role="tabpanel" aria-labelledby="tab-btn-split" class="module-view" hidden>
+        <div class="view-hero">
+          <div>
+            <span class="eyebrow">DIVISIÓN DE CUENTAS &amp; FACTURAS MULTI-BANCO</span>
+            <h2 id="split-title-heading">Vaquita Split-Pay Conciliada Automáticamente</h2>
+            <p>Divide cualquier cuenta entre varios participantes dispersando los cobros hacia distintas CLABEs (BBVA, Santander, Banco Azteca). Cada pago CoDi actualiza el progreso al instante sin revisar comprobantes.</p>
+          </div>
+          <div class="hero-actions-row">
+            <button id="btn-open-split-builder" type="button" class="btn btn-glass">
+              ✏️ Configurar Participantes
+            </button>
+            <button id="btn-reset-split" type="button" class="btn btn-outline">
+              🔄 Reiniciar Cuenta
+            </button>
+          </div>
+        </div>
+
+        <!-- Formulario colapsable para personalizar la Vaquita -->
+        <form id="form-custom-split" class="split-builder-card" hidden>
+          <div class="section-title-bar">
+            <h3>Configurar Nueva Cuenta Dividida</h3>
+            <button type="button" id="btn-close-split-builder" class="btn btn-outline btn-xs">Cancelar</button>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label for="split-custom-title">Concepto de la Cuenta / Mesa</label>
+              <input id="split-custom-title" type="text" value="Cena Equipo &amp; Servicio" maxlength="50" required />
+            </div>
+            <div class="form-group">
+              <label for="split-custom-names">Nombres de Participantes (separados por coma)</label>
+              <input id="split-custom-names" type="text" value="Ana (BBVA), Carlos (Santander), Sofía (Azteca)" required />
+            </div>
+            <div class="form-group" style="flex: 0 0 auto; align-self: flex-end;">
+              <button type="submit" class="btn btn-primary">Crear Vaquita</button>
+            </div>
+          </div>
+        </form>
+
+        <div class="split-dashboard">
+          <!-- Anillo Visual de Progreso -->
+          <div class="split-ring-card">
+            <div class="ring-chart-wrapper">
+              <svg class="split-ring-svg" viewBox="0 0 140 140" aria-hidden="true">
+                <circle class="ring-bg" cx="70" cy="70" r="56" />
+                <circle id="split-ring-circle" class="ring-fill" cx="70" cy="70" r="56" stroke-dasharray="351.86" stroke-dashoffset="351.86" />
+              </svg>
+              <div class="ring-center-text">
+                <strong id="split-pct-big">0%</strong>
+                <span id="split-amount-text">$0.00 / $0.03 MXN</span>
+              </div>
+            </div>
+            <p id="split-status-text" class="split-status-caption">Recaudando aportaciones...</p>
+            <div class="progress-bar-bg" hidden>
+              <div id="split-progress-fill" class="progress-bar-fill" style="width: 0%"></div>
+            </div>
+          </div>
+
+          <!-- Tarjetas de Participantes -->
+          <div class="split-participants-col">
+            <div id="split-participants" class="split-cards-grid"></div>
+            <div id="split-dedications" class="dedications-strip"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- =================================================================
+           VISTA 4: PEYSTUDIO LIVE (SECUENCIADOR 8-PASOS + LIENZO + AUDIO)
+           ================================================================= -->
+      <section id="view-studio" role="tabpanel" aria-labelledby="tab-btn-studio" class="module-view" hidden>
+        <div class="view-hero">
+          <div>
+            <span class="eyebrow">ESTUDIO COLECTIVO AUDIOVISUAL EN TIEMPO REAL</span>
+            <h2>PeyStudio: Secuenciador Web Audio, Lienzo &amp; Narrativa</h2>
+            <p>Cada aportación CoDi desbloquea pistas del sintetizador en vivo, permite programar el secuenciador de 8 pasos, pinta baldosas neón en el mural compartido y vota el rumbo de la historia.</p>
+          </div>
+          <div class="studio-controls-cluster">
+            <div class="bpm-control">
+              <label for="studio-bpm-range">Tempo: <strong id="studio-bpm">124 BPM</strong></label>
+              <input id="studio-bpm-range" type="range" min="90" max="160" value="124" />
+            </div>
+          </div>
+        </div>
+
+        <!-- Visualizador de Espectro Web Audio en Canvas -->
+        <div class="visualizer-banner">
+          <canvas id="audio-visualizer" width="900" height="84" aria-label="Visualizador de ondas de audio en vivo"></canvas>
+          <div class="visualizer-overlay">
+            <span>SINTETIZADOR ANALÓGICO WEB AUDIO API</span>
+            <span id="visualizer-state-label">Haz clic en "🔊 Audio" arriba para escuchar la mezcla en vivo</span>
+          </div>
+        </div>
+
+        <!-- Secuenciador Interactivo de 4 Pistas x 8 Pasos -->
+        <div class="studio-card">
+          <div class="section-title-bar">
+            <h3>🎛️ Secuenciador Multipista (8 Pasos)</h3>
+            <span class="small-muted">Haz clic en los pasos de las pistas activas para editar el ritmo o desbloquea nuevas capas con CoDi</span>
+          </div>
+          <div id="synth-tracks-grid" class="sequencer-rack" aria-label="Secuenciador de pistas musicales"></div>
+        </div>
+
+        <div class="studio-bottom-grid">
+          <!-- Lienzo / Mural Colectivo -->
+          <div class="studio-card">
+            <div class="section-title-bar">
+              <h3>🎨 Lienzo Colectivo Neón</h3>
+              <button type="button" id="btn-add-mural-tile" class="btn btn-primary btn-xs">
+                + Pintar Baldosa ($0.01)
+              </button>
+            </div>
+            <div id="mural-grid" class="mural-canvas-grid"></div>
+          </div>
+
+          <!-- Narrativa Interactiva -->
+          <div class="studio-card">
+            <div class="section-title-bar">
+              <h3>📖 Decisiones de la Red</h3>
+              <span class="small-muted">Votación verificada por transacción</span>
+            </div>
+            <div id="story-branches" class="story-branches-box"></div>
+            <div id="story-feed" class="story-timeline"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- =================================================================
+           VISTA 5: CUENTAS CLABE, VALIDADOR BANXICO & MONITOR WEBHOOKS
+           ================================================================= -->
+      <section id="view-clabes" role="tabpanel" aria-labelledby="tab-btn-clabes" class="module-view" hidden>
+        <div class="view-hero">
+          <div>
+            <span class="eyebrow">TESORERÍA MULTI-BANCO &amp; AUDITORÍA CRIPTOGRÁFICA</span>
+            <h2>Cuentas CLABE Receptoras &amp; Monitor Standard Webhooks</h2>
+            <p>Administra las cuentas bancarias conectadas a Pey, registra nuevas CLABEs verificando en vivo el dígito verificador de Banxico (ponderación 3-7-1) y audita cada webhook firmado con HMAC-SHA256.</p>
+          </div>
+          <button id="btn-sim-forged" type="button" class="btn btn-danger btn-sm">
+            🛡️ Probar Rechazo de Firma Adulterada (HTTP 401)
+          </button>
+        </div>
+
+        <!-- Tarjetas Visuales estilo Fintech para cada CLABE -->
+        <div id="clabes-cards-grid" class="bank-cards-grid" aria-label="Tarjetas de cuentas CLABE"></div>
+
+        <div class="clabes-bottom-split">
+          <!-- Alta de CLABE con Validador Banxico en Vivo + Tabla Resumen -->
+          <div class="studio-card">
+            <h3>➕ Registrar Cuenta CLABE (Validador Banxico 3-7-1 en Vivo)</h3>
+            <p class="small-muted">Escribe los 18 dígitos. Si escribes los primeros 17 dígitos, calculamos automáticamente el dígito verificador oficial de Banxico.</p>
+
+            <form id="form-register-clabe" class="clabe-register-form">
+              <div class="form-row">
+                <div class="form-group">
+                  <label for="new-clabe-holder">Nombre del Titular o Razón Social</label>
+                  <input id="new-clabe-holder" type="text" placeholder="Ej. Taquería El Pastor S.A." required />
+                </div>
+                <div class="form-group">
+                  <label for="new-clabe-role">Uso / Módulo Asignado</label>
+                  <input id="new-clabe-role" type="text" placeholder="Ej. Caja Principal Sucursal Roma" />
+                </div>
+              </div>
+              <div class="form-row">
+                <div class="form-group">
+                  <label for="new-clabe-number">CLABE Interbancaria (18 dígitos)</label>
+                  <input id="new-clabe-number" type="text" pattern="[0-9]{18}" maxlength="18" placeholder="012180015826225713" class="mono-input" required />
+                </div>
+                <div class="form-group" style="flex: 0 0 auto; align-self: flex-end;">
+                  <button type="submit" class="btn btn-emerald">+ Registrar Cuenta</button>
+                </div>
+              </div>
+              <div id="clabe-live-feedback" class="clabe-feedback-banner" aria-live="polite">
+                Ingresa una CLABE de 18 dígitos para verificar banco y dígito de control.
+              </div>
+            </form>
+
+            <div class="table-scroll">
+              <table class="clabe-table">
+                <thead>
+                  <tr>
+                    <th>Titular</th>
+                    <th>CLABE (18 dígitos)</th>
+                    <th>Institución</th>
+                    <th>Acción</th>
+                  </tr>
+                </thead>
+                <tbody id="clabes-table-body"></tbody>
+              </table>
+            </div>
+          </div>
+
+          <!-- Monitor de Webhooks en Tiempo Real -->
+          <div class="studio-card">
+            <div class="section-title-bar">
+              <h3>📡 Auditoría de Webhooks (<code>/api/webhooks/pey</code>)</h3>
+              <span class="pill-codi">HMAC-SHA256</span>
+            </div>
+            <div id="webhook-logs-list" class="logs-list" role="log" aria-live="polite"></div>
+          </div>
+        </div>
+      </section>
+
+    </div>
+
+    <!-- =================================================================
+         COLUMNA LATERAL DERECHA: TERMINAL DE ORDEN ACTIVA & CHECKOUT CODI
+         ================================================================= -->
+    <aside class="checkout-dock" aria-label="Terminal CoDi de orden activa">
+      <!-- Tarjeta Interactiva de la Orden Activa -->
+      <section class="dock-card" id="active-order-panel" aria-live="polite">
+        <div class="dock-header">
+          <div>
+            <span class="eyebrow">TERMINAL DE COBRO EN VIVO</span>
+            <h2>Orden CoDi Activa</h2>
+          </div>
+          <span id="active-order-badge" class="status-tag">Lista</span>
+        </div>
+
+        <div id="active-order-empty" class="dock-empty-state">
+          <div class="empty-illustration" aria-hidden="true">📱</div>
+          <h3>Selecciona cualquier acción o crea un cobro</h3>
+          <p>Elige un producto del POS, un casillero inteligente, una parte de la Vaquita o una pista en PeyStudio para desplegar el código QR CoDi o enviar cobro Push al celular.</p>
+          <button type="button" id="btn-empty-new-order" class="btn btn-primary btn-block">
+            ⚡ Crear Cobro CoDi Personalizado
+          </button>
+        </div>
+
+        <div id="active-order-content" hidden>
+          <!-- Encabezado tipo Tarjeta Bancaria de la Orden -->
+          <div class="ticket-header-card">
+            <div class="ticket-top-row">
+              <span id="ao-id" class="mono-tag">ord_...</span>
+              <span id="ao-amount" class="ticket-price">$0.01 MXN</span>
+            </div>
+            <h3 id="ao-concept" class="ticket-concept">Concepto</h3>
+            <div class="ticket-bank-meta">
+              <div>
+                <span class="meta-kicker">Titular Receptor</span>
+                <strong id="ao-holder">Titular</strong> · <span id="ao-bank">Banco</span>
+              </div>
+              <div class="ticket-clabe-row">
+                <span>CLABE: <code id="ao-clabe" class="mono"></code></span>
+                <span>Ref: <code id="ao-ref" class="mono"></code></span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Pipeline Visual de 4 Etapas -->
+          <div class="state-pipeline" aria-label="Progreso de la transacción">
+            <div class="step" id="step-created">
+              <span class="step-dot">1</span>
+              <span>Solicitud</span>
+            </div>
+            <div class="step" id="step-paid">
+              <span class="step-dot">2</span>
+              <span>Pagada</span>
+            </div>
+            <div class="step" id="step-otp">
+              <span class="step-dot">3</span>
+              <span>PIN OTP</span>
+            </div>
+            <div class="step" id="step-delivered">
+              <span class="step-dot">4</span>
+              <span>Entregada</span>
+            </div>
+          </div>
+
+          <!-- Vista de Código QR CoDi con Anillo de Expiración -->
+          <div id="ao-qr-wrapper" class="qr-stage">
+            <div class="qr-frame">
+              <img id="ao-qr-img" alt="Código QR CoDi escaneable" width="210" height="210" />
+            </div>
+            <div class="qr-timer-row">
+              <span class="pulse-dot"></span>
+              <span id="ao-countdown-text">Escanea con tu app bancaria CoDi</span>
+            </div>
+          </div>
+
+          <!-- Vista de Notificación Push CoDi (/codi/pn) -->
+          <div id="ao-push-wrapper" class="push-stage" hidden>
+            <div class="push-phone-graphic" aria-hidden="true">📲</div>
+            <h4>Cobro Push CoDi Enviado</h4>
+            <p>Solicitud <code>/codi/pn</code> despachada al celular <strong id="ao-phone"></strong>.</p>
+            <span class="small-muted">Autoriza el cobro desde la notificación de tu aplicación bancaria.</span>
+          </div>
+
+          <!-- Tarjeta Destacada de PIN OTP de Un Solo Uso -->
+          <div id="ao-otp-box" class="otp-ticket-card" hidden>
+            <div class="otp-ticket-top">
+              <div>
+                <span class="otp-kicker">TOKEN DE ENTREGA UN SOLO USO</span>
+                <h4>PIN Criptográfico</h4>
+              </div>
+              <strong id="ao-otp-code" class="otp-digits">------</strong>
+            </div>
+            <p class="small-muted">
+              Valida este PIN para liberar la compuerta del casillero o registrar la entrega física del pedido:
+            </p>
+            <div class="otp-verify-row">
+              <input id="input-verify-otp" type="text" maxlength="6" placeholder="PIN 6 dígitos" aria-label="Ingresar código OTP de 6 dígitos" />
+              <button id="btn-verify-otp" type="button" class="btn btn-emerald">
+                🔓 Validar y Entregar
+              </button>
+            </div>
+          </div>
+
+          <!-- Tarjeta de Voucher por Pago Tardío -->
+          <div id="ao-voucher-box" class="voucher-ticket-card" hidden>
+            <div class="voucher-header">
+              <span>⏰ Pago Tardío Detectado</span>
+              <code id="ao-voucher-code" class="mono voucher-pill">VCHR-XXXXXX</code>
+            </div>
+            <p>El pago fue liquidado después de vencer la ventana de reserva. Se emitió un crédito firmado automáticamente.</p>
+          </div>
+
+          <!-- Controles de Recepción de Webhook / Pasarela Bancaria -->
+          <div class="webhook-dispatcher-box">
+            <div class="dispatcher-header">
+              <span>⚡ Confirmación de Pasarela CoDi (Standard Webhooks)</span>
+            </div>
+            <button type="button" class="btn btn-emerald btn-block" id="btn-sim-success">
+              ✅ Confirmar Liquidación CoDi (Webhook HMAC)
+            </button>
+
+            <details class="edge-cases-drawer">
+              <summary>Probar resiliencia bancaria (Idempotencia, Expiración, Failover)</summary>
+              <div class="edge-cases-grid">
+                <button type="button" class="btn btn-glass btn-xs" id="btn-sim-duplicate">
+                  🔁 Reintento Webhook Duplicado
+                </button>
+                <button type="button" class="btn btn-amber btn-xs" id="btn-sim-late">
+                  ⏰ Liquidación Tardía (Voucher)
+                </button>
+                <button type="button" class="btn btn-danger btn-xs" id="btn-sim-reject">
+                  🔄 Rechazo / Failover CLABE
+                </button>
+              </div>
+            </details>
+          </div>
+
+          <!-- Historial Reciente de Órdenes para Cambiar con 1 Clic -->
+          <div class="recent-orders-strip">
+            <span class="meta-kicker">Órdenes Recientes</span>
+            <div id="recent-orders-pills" class="recent-orders-pills"></div>
+          </div>
+        </div>
+      </section>
+    </aside>
+  </main>
+
+  <!-- =================================================================
+       MODAL 1: GENERADOR DE COBRO CODI PERSONALIZADO (QR O PUSH /codi/pn)
+       ================================================================= -->
+  <dialog id="order-modal" class="modal">
+    <form id="form-create-order" class="modal-box">
+      <div class="modal-header">
+        <div>
+          <span class="eyebrow">EMISIÓN DE ORDEN CODI</span>
+          <h2>Nuevo Cobro CoDi (QR o Push Celular)</h2>
+        </div>
+        <button id="btn-close-order-modal" type="button" class="btn btn-outline btn-xs">✕ Cerrar</button>
+      </div>
+
+      <div class="form-group">
+        <label for="order-station">Módulo Destino</label>
+        <select id="order-station" name="station" required>
+          <option value="pos">🏪 Punto de Venta (POS) · Orden con PIN de Entrega</option>
+          <option value="meals">🍲 Comedor Solidario · Patrocinar Comida Abierta</option>
+          <option value="locker">🔐 Smart Lockers &amp; Cabinas · Reserva por Tiempo</option>
+          <option value="split">🤝 Vaquita Split-Pay · Aportación a Cuenta Dividida</option>
+          <option value="synth">🎹 PeyStudio · Desbloquear Pista + Pintar Mural</option>
+        </select>
+      </div>
+
+      <div class="form-group">
+        <label for="order-clabe">Cuenta CLABE Receptora</label>
+        <select id="order-clabe" name="clabeId" required></select>
+      </div>
+
+      <div class="form-row">
+        <div class="form-group">
+          <label for="order-method">Modalidad de Cobro CoDi</label>
+          <select id="order-method" name="method">
+            <option value="QR">📱 Código QR Escaneable (/codi/qr)</option>
+            <option value="PUSH">📲 Notificación Push al Celular (/codi/pn)</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label for="order-amount">Monto (MXN)</label>
+          <input id="order-amount" name="amount" type="number" step="0.01" min="0.01" max="8000" value="0.01" required />
+        </div>
+      </div>
+
+      <div class="form-group" id="phone-group" hidden>
+        <label for="order-phone">Número Celular CoDi del Pagador (10 dígitos)</label>
+        <input id="order-phone" name="phone" type="tel" pattern="[0-9]{10}" maxlength="10" placeholder="5512345678" />
+      </div>
+
+      <div class="form-row">
+        <div class="form-group">
+          <label for="order-concept">Concepto Bancario / Mensaje en Mural</label>
+          <input id="order-concept" name="concept" type="text" maxlength="38" value="ORDEN PEYOS CODI" required />
+        </div>
+        <div class="form-group">
+          <label for="order-alias">Nombre del Cliente / Pagador</label>
+          <input id="order-alias" name="payerAlias" type="text" maxlength="28" placeholder="Ej. Cliente Mostrador" />
+        </div>
+      </div>
+
+      <!-- Opciones específicas si elige PeyStudio -->
+      <div id="station-extra-synth" class="station-extra" hidden>
+        <div class="form-row">
+          <div class="form-group">
+            <label for="synth-track">Capa Musical a Desbloquear</label>
+            <select id="synth-track">
+              <option value="cyber_arp">🎹 Arpegio Cyberpunk</option>
+              <option value="neon_drums">🥁 Pulso Percusivo Sub</option>
+              <option value="chord_pad">🌌 Pad Atmosférico</option>
+              <option value="bass_303">🔊 Bassline 303 Ácido</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label for="story-option">Voto en Decisión de la Red</label>
+            <select id="story-option">
+              <option value="opt_cyber">Sincronizar sintetizador con la red</option>
+              <option value="opt_robot">Despachar pedido con PIN criptográfico</option>
+              <option value="opt_ai">Conciliación multi-CLABE automática</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <!-- Opciones específicas si elige Smart Lockers -->
+      <div id="station-extra-locker" class="station-extra" hidden>
+        <div class="form-row">
+          <div class="form-group">
+            <label for="locker-select">Unidad a Reservar</label>
+            <select id="locker-select">
+              <option value="LOCKER-A1">📦 Casillero Inteligente #A1</option>
+              <option value="POD-CARGA-B2">🔋 Cabina de Carga &amp; Cómputo #B2</option>
+              <option value="SALA-API-C3">🎙️ Cabina Acústica Privada #C3</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label for="locker-duration">Duración de Sesión</label>
+            <select id="locker-duration">
+              <option value="60">60 segundos</option>
+              <option value="120">2 minutos (120s)</option>
+              <option value="300">5 minutos (300s)</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <div class="modal-actions">
+        <button type="submit" class="btn btn-primary-glow btn-block">
+          ⚡ Emitir Orden CoDi Ahora
+        </button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- =================================================================
+       MODAL 2: CONFIGURACIÓN DE CREDENCIALES API.PEY.MX EN CALIENTE
+       ================================================================= -->
+  <dialog id="config-modal" class="modal">
+    <form id="form-config-pey" method="dialog" class="modal-box">
+      <div class="modal-header">
+        <div>
+          <span class="eyebrow">CONEXIÓN CON PORTAL.MIPEY.MX</span>
+          <h2>Credenciales de Producción <code>api.pey.mx</code></h2>
+        </div>
+        <button id="btn-close-config" type="button" class="btn btn-outline btn-xs">✕ Cerrar</button>
+      </div>
+      <p class="small-muted">
+        Conecta tu API Key generada en <a href="https://portal.mipey.mx" target="_blank" rel="noopener noreferrer">portal.mipey.mx</a> para emitir QRs y notificaciones Push CoDi directos a la red de Banxico.
+      </p>
+      <div class="form-group">
+        <label for="cfg-api-key">Pey API Key (Bearer Token)</label>
+        <input id="cfg-api-key" type="password" placeholder="pey_live_..." autocomplete="off" />
+      </div>
+      <div class="form-group">
+        <label for="cfg-webhook-secret">Standard Webhooks Secret (<code>whsec_...</code>)</label>
+        <input id="cfg-webhook-secret" type="password" placeholder="whsec_..." autocomplete="off" />
+      </div>
+      <div class="form-group">
+        <label for="cfg-bank-id">Bank Account ID predeterminado (ULID opcional)</label>
+        <input id="cfg-bank-id" type="text" placeholder="01JBAVWE4NS5TGXHWGMX3KH23Q" />
+      </div>
+      <div class="modal-actions">
+        <button type="submit" class="btn btn-emerald btn-block">Guardar y Conectar</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div id="toast-container" class="toast-container" aria-live="assertive"></div>
+
+  <script src="/app.js"></script>
+</body>
+</html>

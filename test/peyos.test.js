@@ -1,0 +1,215 @@
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const { PREAUTHORIZED_CLABES, validateClabe, computeClabeCheckDigit } = require('../src/config/clabes');
+const { PeyEngine } = require('../src/engine/peyEngine');
+const { signStandardWebhook } = require('../src/services/peyClient');
+const { createAppServer } = require('../src/server');
+
+test('1. Valida las 5 CLABEs pre-autorizadas con algoritmo dígito verificador Banxico (3-7-1)', () => {
+  assert.equal(PREAUTHORIZED_CLABES.length, 5);
+  for (const entry of PREAUTHORIZED_CLABES) {
+    const check = validateClabe(entry.clabe);
+    assert.equal(check.valid, true, `La CLABE de ${entry.holderName} (${entry.clabe}) debe ser válida`);
+    assert.equal(computeClabeCheckDigit(entry.clabe.slice(0, 17)), Number(entry.clabe[17]));
+  }
+
+  // Rechazar CLABE con dígito verificador alterado
+  const tampered = validateClabe('012180015826225719');
+  assert.equal(tampered.valid, false);
+});
+
+test('2. Inicia con estado funcional limpio (sin datos falsos pre-sembrados) y ejecuta orden QR/Push con idempotencia', async () => {
+  const engine = new PeyEngine({ webhookSecret: 'whsec_test_secret_123' });
+
+  // Estado inicial limpio sin comidas falsas ni baldosas de demo
+  assert.equal(engine.sponsoredMeals.fundedCount, 0);
+  assert.equal(engine.sponsoredMeals.deliveredCount, 0);
+  assert.equal(engine.liveStudio.muralTiles.length, 0);
+
+  const order = await engine.createOrder({
+    station: 'synth',
+    method: 'PUSH',
+    phone: '5512345678',
+    concept: 'BEAT TECHNO',
+    clabeId: 'acc_ramon_bbva',
+    metadata: { trackKey: 'cyber_arp', muralWord: 'TECHNO' },
+  });
+
+  assert.equal(order.status, 'PUSH_SENT');
+  assert.equal(order.amount, 0.01);
+
+  // Primer envío de webhook firmado -> Ejecuta una sola vez
+  const firstResult = engine.simulateSignedWebhookForOrder(order.orderId, 'SUCCESS');
+  assert.equal(firstResult.httpStatus, 200);
+  assert.equal(firstResult.status, 'PAID_AND_EXECUTED');
+  assert.ok(firstResult.otpCode);
+  assert.equal(engine.liveStudio.activeTracks.cyber_arp.paidCount, 1);
+  assert.equal(engine.liveStudio.muralTiles.length, 1);
+
+  // Segundo envío con el mismo webhookId / transactionId -> Bloqueado por idempotencia
+  const secondResult = engine.simulateSignedWebhookForOrder(order.orderId, 'DUPLICATE_REPLAY');
+  assert.equal(secondResult.httpStatus, 200);
+  assert.equal(secondResult.status, 'DUPLICATE_IGNORED');
+  assert.equal(secondResult.idempotent, true);
+  assert.equal(engine.liveStudio.activeTracks.cyber_arp.paidCount, 1);
+  assert.equal(engine.metrics.duplicatesBlocked, 1);
+});
+
+test('3. Rechaza webhooks con firma criptográfica adulterada (401 INVALID_SIGNATURE)', () => {
+  const engine = new PeyEngine({ webhookSecret: 'whsec_real_secret' });
+  const rawBody = JSON.stringify({
+    type: 'codi.qr.payment_received',
+    amount: 0.01,
+    numRef: '10001',
+    transactionId: '01TXNFAKE',
+  });
+  const forgedHeaders = signStandardWebhook(rawBody, 'whsec_wrong_attacker_secret', 'msg_attack_1');
+  const res = engine.processWebhook(rawBody, forgedHeaders);
+
+  assert.equal(res.httpStatus, 401);
+  assert.equal(res.status, 'INVALID_SIGNATURE');
+  assert.equal(engine.metrics.invalidSignaturesBlocked, 1);
+});
+
+test('4. Separa Pago de Identidad/Entrega: Smart Locker requiere OTP de un solo uso y permite liberación manual', async () => {
+  const engine = new PeyEngine();
+  const order = await engine.createOrder({
+    station: 'locker',
+    method: 'QR',
+    concept: 'CASILLERO A1',
+    clabeId: 'acc_santiago_bbva',
+    metadata: { lockerId: 'LOCKER-A1', durationSeconds: 60 },
+  });
+
+  assert.equal(engine.lockers['LOCKER-A1'].status, 'RESERVED_WAITING_PAYMENT');
+
+  const paid = engine.simulateSignedWebhookForOrder(order.orderId, 'SUCCESS');
+  assert.equal(paid.status, 'PAID_AND_EXECUTED');
+  // El pago NO abre el casillero hasta verificar el OTP
+  assert.equal(engine.lockers['LOCKER-A1'].status, 'PAID_WAITING_OTP');
+
+  // OTP incorrecto lanza error
+  assert.throws(() => {
+    engine.verifyDeliveryOtp({ orderId: order.orderId, otpCode: '000000' });
+  }, /Código OTP inválido/);
+
+  // OTP correcto desbloquea el casillero e inicia el temporizador
+  const delivered = engine.verifyDeliveryOtp({ orderId: order.orderId, otpCode: paid.otpCode });
+  assert.equal(delivered.status, 'DELIVERED');
+  assert.equal(engine.lockers['LOCKER-A1'].status, 'UNLOCKED_ACTIVE');
+  assert.equal(engine.lockers['LOCKER-A1'].remainingSeconds, 60);
+
+  // Reuso del mismo OTP es rechazado (un solo uso)
+  assert.throws(() => {
+    engine.verifyDeliveryOtp({ orderId: order.orderId, otpCode: paid.otpCode });
+  }, /ya fue utilizado/);
+
+  // Liberación manual de la unidad cuando el usuario termina
+  const released = engine.releaseLocker('LOCKER-A1');
+  assert.equal(released.status, 'LOCKED_IDLE');
+  assert.equal(released.remainingSeconds, 0);
+});
+
+test('5. Maneja Pagos Tardíos emitiendo Voucher Criptográfico y Failover Bancario Multi-CLABE', async () => {
+  const engine = new PeyEngine();
+  const order = await engine.createOrder({
+    station: 'pos',
+    method: 'QR',
+    concept: 'CITA TARDIA',
+    clabeId: 'acc_ramon_bbva',
+  });
+
+  // Rechazo en BBVA (012) -> Failover automático a Santander (014)
+  const failedOver = engine.simulateSignedWebhookForOrder(order.orderId, 'BANK_REJECT');
+  assert.equal(failedOver.status, 'FAILOVER_READY_RETRY');
+  assert.equal(failedOver.bankName, 'Santander México');
+  assert.equal(engine.metrics.failoversExecuted, 1);
+
+  // Pago tardío después de expiración -> Emite Voucher de crédito/devolución
+  const lateRes = engine.simulateSignedWebhookForOrder(order.orderId, 'LATE_PAYMENT');
+  assert.equal(lateRes.status, 'LATE_PAYMENT_VOUCHER_ISSUED');
+  assert.match(lateRes.voucherCode, /^VCHR-/);
+  assert.equal(engine.metrics.latePaymentsHandled, 1);
+});
+
+test('6. Concilia automáticamente Vaquita Split-Pay personalizada y actualiza secuenciador musical', async () => {
+  const engine = new PeyEngine();
+  engine.resetSplitSession({
+    title: 'Cena Taquería',
+    participants: [
+      { slotId: 'p1', name: 'Ana', clabeId: 'acc_ramon_bbva', amount: 0.01 },
+      { slotId: 'p2', name: 'Luis', clabeId: 'acc_adrian_santander', amount: 0.01 },
+    ],
+  });
+
+  assert.equal(engine.splitSession.targetAmount, 0.02);
+
+  for (const participant of engine.splitSession.participants) {
+    const ord = await engine.createOrder({
+      station: 'split',
+      method: 'QR',
+      concept: `CUENTA ${participant.slotId}`,
+      clabeId: participant.clabeId,
+      metadata: { slotId: participant.slotId, dedication: 'Listo mi pago' },
+    });
+    engine.simulateSignedWebhookForOrder(ord.orderId, 'SUCCESS');
+  }
+
+  assert.equal(engine.splitSession.collectedAmount, 0.02);
+  assert.equal(engine.splitSession.status, 'COMPLETED_RECONCILED');
+
+  // Actualizar paso del secuenciador y BPM
+  const studio = engine.updateStudioSequencer({ trackKey: 'bass_303', stepIndex: 1, active: true, bpm: 132 });
+  assert.equal(studio.bpm, 132);
+  assert.equal(studio.activeTracks.bass_303.steps[1], true);
+});
+
+test('7. Servidor HTTP responde en /api/state, /api/orders, /api/clabes/validate y /api/webhooks/dispatch', async () => {
+  const { server } = createAppServer();
+  await new Promise((resolve) => server.listen(0, resolve));
+  const { port } = server.address();
+  const base = `http://127.0.0.1:${port}`;
+
+  try {
+    const stateRes = await fetch(`${base}/api/state`);
+    assert.equal(stateRes.status, 200);
+    const stateData = await stateRes.json();
+    assert.equal(stateData.clabes.length, 5);
+    assert.equal(stateData.posCatalog.length, 4);
+
+    // Probar sugerencia de dígito verificador con 17 dígitos
+    const valRes = await fetch(`${base}/api/clabes/validate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ clabe: '01218001582622571' }),
+    });
+    assert.equal(valRes.status, 200);
+    const valBody = await valRes.json();
+    assert.equal(valBody.suggestedDigit, 3);
+
+    const createRes = await fetch(`${base}/api/orders`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        station: 'meals',
+        method: 'QR',
+        concept: 'TACO PATROCINADO',
+        clabeId: 'acc_david_azteca',
+      }),
+    });
+    assert.equal(createRes.status, 201);
+    const { order } = await createRes.json();
+    assert.ok(order.qrDataUrl.startsWith('data:image/png;base64,'));
+
+    const simRes = await fetch(`${base}/api/webhooks/dispatch`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ orderId: order.orderId, scenario: 'SUCCESS' }),
+    });
+    assert.equal(simRes.status, 200);
+    const simBody = await simRes.json();
+    assert.equal(simBody.chaosResult.status, 'PAID_AND_EXECUTED');
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
