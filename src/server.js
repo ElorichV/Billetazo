@@ -288,7 +288,7 @@ function createAppServer(engineInstance) {
       const releaseMatch = pathname.match(/^\/api\/lockers\/([^/]+)\/release$/);
       if (req.method === 'POST' && releaseMatch) {
         const lockerId = decodeURIComponent(releaseMatch[1]);
-        const locker = engine.releaseLocker(lockerId);
+        const locker = engine.releaseLocker(lockerId, req.headers['x-claim-token']);
         sendJson(res, 200, { ok: true, locker });
         return;
       }
@@ -311,10 +311,15 @@ function createAppServer(engineInstance) {
 
       sendJson(res, 404, { ok: false, error: 'Ruta no encontrada.' });
     } catch (err) {
-      sendJson(res, err?.statusCode || 400, {
-        ok: false,
-        error: err instanceof Error ? err.message : 'Error procesando la solicitud.',
-      });
+      if (err instanceof SyntaxError) {
+        sendJson(res, 400, { ok: false, error: 'JSON malformado.' });
+      } else if (err?.statusCode || err?.constructor === Error) {
+        // Errores de validación lanzados a propósito por el motor
+        sendJson(res, err.statusCode || 400, { ok: false, error: err.message });
+      } else {
+        console.error(err);
+        sendJson(res, 500, { ok: false, error: 'Error interno.' });
+      }
     }
   });
 

@@ -137,6 +137,31 @@ class PeyClient {
   }
 
   /**
+   * POST autenticado a api.pey.mx. En modo LIVE un fallo es error 502: nunca se cae a datos locales,
+   * porque un QR local no se puede pagar.
+   */
+  async _liveRequest(endpoint, payload) {
+    let res;
+    try {
+      res = await fetch(`${this.baseUrl}${endpoint}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+          Authorization: `Bearer ${this.apiKey}`,
+        },
+        body: JSON.stringify(payload),
+      });
+    } catch (_err) {
+      throw Object.assign(new Error(`api.pey.mx no respondió (${endpoint}).`), { statusCode: 502 });
+    }
+    if (!res.ok) {
+      throw Object.assign(new Error(`api.pey.mx respondió ${res.status} (${endpoint}).`), { statusCode: 502 });
+    }
+    return res.json();
+  }
+
+  /**
    * Crea un código QR de CoDi vía POST https://api.pey.mx/codi/qr
    */
   async createCodiQr({ amount = 0.01, concept, expiration = 180, numRef, bankAccountId, clabe }) {
@@ -154,35 +179,20 @@ class PeyClient {
     }
 
     if (this.isLiveConfigured()) {
-      try {
-        const res = await fetch(`${this.baseUrl}/codi/qr`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Accept: 'application/json',
-            Authorization: `Bearer ${this.apiKey}`,
-          },
-          body: JSON.stringify(payload),
-        });
-        if (res.ok) {
-          const data = await res.json();
-          const qrString = data.qrString || JSON.stringify(data);
-          const qrDataUrl = await QRCode.toDataURL(qrString, {
-            errorCorrectionLevel: 'M',
-            margin: 2,
-            width: 280,
-          });
-          return {
-            source: 'LIVE_PEY_API',
-            codiQrId: data.id || `35${crypto.randomBytes(4).toString('hex')}`,
-            qrString,
-            qrDataUrl,
-            requestPayload: payload,
-          };
-        }
-      } catch (_err) {
-        // Continúa con generación criptográfica local CoDi si el endpoint remoto no está disponible
-      }
+      const data = await this._liveRequest('/codi/qr', payload);
+      const qrString = data.qrString || JSON.stringify(data);
+      const qrDataUrl = await QRCode.toDataURL(qrString, {
+        errorCorrectionLevel: 'M',
+        margin: 2,
+        width: 280,
+      });
+      return {
+        source: 'LIVE_PEY_API',
+        codiQrId: data.id || `35${crypto.randomBytes(4).toString('hex')}`,
+        qrString,
+        qrDataUrl,
+        requestPayload: payload,
+      };
     }
 
     const codiQrId = `35${crypto.randomBytes(4).toString('hex')}`;
@@ -230,29 +240,14 @@ class PeyClient {
     }
 
     if (this.isLiveConfigured()) {
-      try {
-        const res = await fetch(`${this.baseUrl}/codi/pn`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Accept: 'application/json',
-            Authorization: `Bearer ${this.apiKey}`,
-          },
-          body: JSON.stringify(payload),
-        });
-        if (res.ok) {
-          const data = await res.json();
-          return {
-            source: 'LIVE_PEY_API',
-            pushId: data.id || `pn_${crypto.randomBytes(5).toString('hex')}`,
-            phone: cleanPhone,
-            requestPayload: payload,
-            apiResponse: data,
-          };
-        }
-      } catch (_err) {
-        // Continúa con despacho local verificable
-      }
+      const data = await this._liveRequest('/codi/pn', payload);
+      return {
+        source: 'LIVE_PEY_API',
+        pushId: data.id || `pn_${crypto.randomBytes(5).toString('hex')}`,
+        phone: cleanPhone,
+        requestPayload: payload,
+        apiResponse: data,
+      };
     }
 
     return {
@@ -270,23 +265,8 @@ class PeyClient {
   async registerBankAccount({ clabe, holderName }) {
     const payload = { clabe, holderName };
     if (this.isLiveConfigured()) {
-      try {
-        const res = await fetch(`${this.baseUrl}/bank-account`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Accept: 'application/json',
-            Authorization: `Bearer ${this.apiKey}`,
-          },
-          body: JSON.stringify(payload),
-        });
-        if (res.ok) {
-          const data = await res.json();
-          return { source: 'LIVE_PEY_API', ...data };
-        }
-      } catch (_err) {
-        // Continúa con registro local
-      }
+      const data = await this._liveRequest('/bank-account', payload);
+      return { source: 'LIVE_PEY_API', ...data };
     }
     return {
       source: 'LOCAL_CODI_ENGINE',

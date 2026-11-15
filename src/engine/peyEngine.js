@@ -347,7 +347,10 @@ class PeyEngine extends EventEmitter {
         processedWebhookIds: Array.from(this.processedWebhookIds).slice(-200),
         processedTransactionIds: Array.from(this.processedTransactionIds).slice(-200),
       };
-      fs.writeFileSync(this.persistPath, JSON.stringify(payload, null, 2), 'utf8');
+      // Escribir y renombrar: un fallo a medias no corrompe el estado anterior
+      const tmpPath = `${this.persistPath}.tmp`;
+      fs.writeFileSync(tmpPath, JSON.stringify(payload, null, 2), 'utf8');
+      fs.renameSync(tmpPath, this.persistPath);
     } catch (_err) {
       // Ignorar errores de escritura en entornos de solo lectura
     }
@@ -410,10 +413,13 @@ class PeyEngine extends EventEmitter {
   /**
    * Libera manualmente un casillero o cabina activa cuando el usuario termina de usarlo.
    */
-  releaseLocker(lockerId) {
+  releaseLocker(lockerId, claimToken) {
     const locker = this.lockers[lockerId];
     if (!locker) {
       throw new Error('Unidad no encontrada.');
+    }
+    if (locker.activeOrderId && !this._claimMatches(this.orders.get(locker.activeOrderId), claimToken)) {
+      throw Object.assign(new Error('Solo quien pagó la unidad puede cerrarla.'), { statusCode: 403 });
     }
     locker.status = 'LOCKED_IDLE';
     locker.activeOrderId = null;
@@ -446,6 +452,16 @@ class PeyEngine extends EventEmitter {
     const targetAccount = this.getClabeById(clabeId);
     const now = Date.now();
     const expiresAt = now + Number(ttlSeconds) * 1000;
+
+    if (station === 'locker') {
+      const locker = this.lockers[metadata.lockerId];
+      if (!locker) {
+        throw new Error('Unidad no encontrada.');
+      }
+      if (locker.status !== 'LOCKED_IDLE') {
+        throw new Error(`Unidad ocupada (${locker.status}).`);
+      }
+    }
 
     let codiResult;
     const normalizedMethod = String(method).toUpperCase() === 'PUSH' ? 'PUSH' : 'QR';
@@ -504,12 +520,10 @@ class PeyEngine extends EventEmitter {
     this.metrics.totalOrdersCreated += 1;
 
     // Si es orden de Locker/Tiempo, reservar la unidad mientras se confirma el pago
-    if (station === 'locker' && metadata.lockerId && this.lockers[metadata.lockerId]) {
+    if (station === 'locker') {
       const locker = this.lockers[metadata.lockerId];
-      if (locker.status === 'LOCKED_IDLE') {
-        locker.status = 'RESERVED_WAITING_PAYMENT';
-        locker.activeOrderId = orderId;
-      }
+      locker.status = 'RESERVED_WAITING_PAYMENT';
+      locker.activeOrderId = orderId;
     }
 
     // Si es orden de Vaquita Split-Pay, asociar al participante
@@ -650,12 +664,36 @@ class PeyEngine extends EventEmitter {
     }
 
     const now = Date.now();
+
+    // ponytail: no acumula pagos parciales; un segundo pago completo sí libera la orden
+    const paidCentavos = Math.round(Number(payload.amount) * 100);
+    if (!Number.isFinite(paidCentavos) || paidCentavos < Math.round(order.amount * 100)) {
+      order.status = 'UNDERPAID';
+      const underpaidLog = {
+        id: `log_${crypto.randomBytes(4).toString('hex')}`,
+        timestamp: now,
+        webhookId,
+        transactionId,
+        orderId: order.orderId,
+        eventType: payload.type,
+        numRef: order.numRef,
+        outcome: 'AMOUNT_MISMATCH',
+        reason: `Pago de $${Number(payload.amount || 0).toFixed(2)} menor al monto de la orden ($${order.amount.toFixed(2)}).`,
+      };
+      this._pushWebhookLog(underpaidLog);
+      this._broadcastState('order.underpaid', { order, log: underpaidLog });
+      return { httpStatus: 200, status: 'AMOUNT_MISMATCH', orderId: order.orderId };
+    }
+
     const paidTimestampMs = payload.datePaid ? Number(payload.datePaid) * 1000 : now;
-    const isLate = paidTimestampMs > order.expiresAt || order.status === 'EXPIRED';
+    // Un webhook retrasado puede llegar cuando la reserva ya venció y otra persona tomó la unidad
+    const reservedLocker = order.station === 'locker' ? this.lockers[order.metadata?.lockerId] : null;
+    const lockerLost = Boolean(reservedLocker) && reservedLocker.activeOrderId !== order.orderId;
+    const isLate = paidTimestampMs > order.expiresAt || order.status === 'EXPIRED' || lockerLost;
 
     this.metrics.totalPaidOrders += 1;
     this.metrics.totalCentavosCollectedMxn = Number(
-      (this.metrics.totalCentavosCollectedMxn + Number(payload.amount || order.amount || 0.01)).toFixed(2)
+      (this.metrics.totalCentavosCollectedMxn + paidCentavos / 100).toFixed(2)
     );
 
     order.paidAt = paidTimestampMs;
@@ -766,7 +804,8 @@ class PeyEngine extends EventEmitter {
 
       const word = String(meta.muralWord || order.concept || 'PEY LIVE').toUpperCase().slice(0, 18);
       const colors = ['#10b981', '#6366f1', '#f59e0b', '#ec4899', '#06b6d4', '#a855f7'];
-      const color = meta.tileColor || colors[this.liveStudio.muralTiles.length % colors.length];
+      // tileColor viene del cliente y termina dentro de style=""; solo #hex
+      const color = /^#[0-9a-f]{6}$/i.test(meta.tileColor || '') ? meta.tileColor : colors[this.liveStudio.muralTiles.length % colors.length];
       this.liveStudio.muralTiles.unshift({
         id: `tile_${order.orderId}`,
         word,
@@ -797,10 +836,11 @@ class PeyEngine extends EventEmitter {
         completedAt: Date.now(),
       });
     } else if (order.station === 'locker') {
-      const lockerId = meta.lockerId || 'LOCKER-A1';
-      const locker = this.lockers[lockerId] || this.lockers['LOCKER-A1'];
-      locker.status = 'PAID_WAITING_OTP';
-      locker.activeOrderId = order.orderId;
+      const locker = this.lockers[meta.lockerId];
+      if (locker) {
+        locker.status = 'PAID_WAITING_OTP';
+        locker.activeOrderId = order.orderId;
+      }
     } else if (order.station === 'split') {
       const slotId = meta.slotId;
       let slot = this.splitSession.participants.find((p) => p.slotId === slotId || p.orderId === order.orderId);
@@ -864,9 +904,8 @@ class PeyEngine extends EventEmitter {
     order.deliveredAt = Date.now();
     this.metrics.otpDeliveriesVerified += 1;
 
-    if (order.station === 'locker') {
-      const lockerId = order.metadata?.lockerId || 'LOCKER-A1';
-      const locker = this.lockers[lockerId] || this.lockers['LOCKER-A1'];
+    const locker = order.station === 'locker' ? this.lockers[order.metadata?.lockerId] : null;
+    if (locker && locker.activeOrderId === order.orderId) {
       const durationSec = Number(order.metadata?.durationSeconds || locker.defaultDurationSeconds || 60);
       locker.status = 'UNLOCKED_ACTIVE';
       locker.remainingSeconds = (locker.remainingSeconds || 0) + durationSec;
@@ -1010,6 +1049,14 @@ class PeyEngine extends EventEmitter {
     const now = Date.now();
     let changed = false;
     for (const locker of Object.values(this.lockers)) {
+      if (locker.status === 'RESERVED_WAITING_PAYMENT') {
+        const reservation = this.orders.get(locker.activeOrderId);
+        if (!reservation || reservation.expiresAt < now) {
+          locker.status = 'LOCKED_IDLE';
+          locker.activeOrderId = null;
+          changed = true;
+        }
+      }
       if (locker.status === 'UNLOCKED_ACTIVE' && locker.unlockedUntil) {
         const remaining = Math.max(0, Math.ceil((locker.unlockedUntil - now) / 1000));
         if (remaining !== locker.remainingSeconds) {
@@ -1058,11 +1105,15 @@ class PeyEngine extends EventEmitter {
   /**
    * Entrega el PIN de una orden pagada solo a quien presenta el claimToken recibido al crearla.
    */
-  getOrderOtp(orderId, claimToken) {
-    const order = this.orders.get(orderId);
+  _claimMatches(order, claimToken) {
     const provided = Buffer.from(String(claimToken || ''), 'utf8');
     const expected = Buffer.from(String(order?.claimToken || ''), 'utf8');
-    if (!order || !expected.length || provided.length !== expected.length || !crypto.timingSafeEqual(provided, expected)) {
+    return expected.length > 0 && provided.length === expected.length && crypto.timingSafeEqual(provided, expected);
+  }
+
+  getOrderOtp(orderId, claimToken) {
+    const order = this.orders.get(orderId);
+    if (!this._claimMatches(order, claimToken)) {
       throw Object.assign(new Error('Token de orden inválido.'), { statusCode: 403 });
     }
     return { orderId, status: order.status, otpCode: order.status === 'OTP_ISSUED' ? order.otpCode : null };

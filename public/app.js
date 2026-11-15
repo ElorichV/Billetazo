@@ -208,15 +208,15 @@
 
   let adminToken = '';
 
-  async function apiPost(url, body = {}) {
-    const headers = { 'Content-Type': 'application/json' };
+  async function apiPost(url, body = {}, extraHeaders = {}) {
+    const headers = { 'Content-Type': 'application/json', ...extraHeaders };
     if (adminToken) headers['x-admin-token'] = adminToken;
     const res = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body) });
     if (res.status === 403 && !adminToken) {
       const token = window.prompt('Token de administrador para esta acción:');
       if (token) {
         adminToken = token.trim();
-        return apiPost(url, body);
+        return apiPost(url, body, extraHeaders);
       }
     }
     if (res.status === 403) adminToken = '';
@@ -1302,7 +1302,10 @@
       if (releaseBtn) {
         const lockerId = releaseBtn.getAttribute('data-release-locker');
         try {
-          await apiPost(`/api/lockers/${encodeURIComponent(lockerId)}/release`);
+          const activeOrderId = currentState?.lockers?.[lockerId]?.activeOrderId;
+          await apiPost(`/api/lockers/${encodeURIComponent(lockerId)}/release`, {}, {
+            'x-claim-token': orderClaims.get(activeOrderId) || '',
+          });
           showToast(`🔒 ${lockerId} cerrado y disponible nuevamente.`);
         } catch (err) {
           showToast(`⚠️ ${err.message}`);
